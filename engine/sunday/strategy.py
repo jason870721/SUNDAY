@@ -55,6 +55,16 @@ def _exposure_usd(symbol: str) -> float:
     return total
 
 
+def _capture_realized(symbol: str) -> float:
+    """Sum unrealizedPnl of open positions for `symbol` — the realized PnL the
+    instant we close them (persisted onto the DB row for attribution)."""
+    total = 0.0
+    for p in exchange.fetch_positions():
+        if p["symbol"] == exchange._sym(symbol) and p.get("contracts"):
+            total += float(p.get("unrealizedPnl") or 0)
+    return total
+
+
 def reconcile(symbol: str, set_by: str = "system") -> dict:
     """Make the live position match the active strategy's target."""
     strat = store.current_strategy(symbol)
@@ -69,9 +79,10 @@ def reconcile(symbol: str, set_by: str = "system") -> dict:
         return {"action": "noop", "side": current, "rationale": target["rationale"]}
 
     if current != "flat":  # close before flipping / going flat
+        realized = _capture_realized(symbol)
         exchange.close_position(symbol)
         exchange.cancel_all_orders(symbol)
-        store.close_open_positions(symbol)
+        store.close_open_positions(symbol, realized_pnl=realized)
 
     if target["side"] == "flat":
         return {"action": "flat", "rationale": target["rationale"]}
@@ -103,9 +114,10 @@ def _open(symbol: str, side: str, strategy: str, reason: str) -> dict:
 def halt(mode: str, reason: str) -> dict:
     """flat = close everything + stop; safe = freeze new entries (keep existing)."""
     if mode == "flat":
+        realized = _capture_realized(settings.symbol)
         exchange.close_position(settings.symbol)
         exchange.cancel_all_orders(settings.symbol)
-        store.close_open_positions(settings.symbol)
+        store.close_open_positions(settings.symbol, realized_pnl=realized)
         store.set_strategy(settings.symbol, "flat", f"halt(flat): {reason}", "system")
         store.set_mode("halted")
     elif mode == "safe":
@@ -148,7 +160,27 @@ def _watchdog_check() -> dict:
     return {"safe_mode": False, "age": age}
 
 
+def _record_pnl_snapshot() -> dict:
+    """Capture one equity-curve point. Skip (don't pollute the curve) on exchange error."""
+    try:
+        bal = exchange.fetch_balance()
+        equity = float((bal.get("total") or {}).get("USDT") or 0.0)
+        unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in exchange.fetch_positions())
+    except Exception as e:
+        return {"recorded": False, "error": str(e)}
+    realized = store.realized_total()
+    peak = store.equity_peak()
+    peak = max(peak, equity) if peak is not None else equity
+    drawdown = round((peak - equity) / peak * 100, 4) if peak and peak > 0 else 0.0
+    store.record_pnl_snapshot(equity, realized, unrealized, drawdown)
+    return {"recorded": True, "equity": equity, "drawdown_pct": drawdown}
+
+
 def tick() -> dict:
-    """One periodic self-check (regime + watchdog), run by the watcher loop."""
+    """One periodic self-check (regime + watchdog + equity snapshot), run by the watcher loop."""
     sym = settings.symbol
-    return {"regime": _detect_regime_and_notify(sym), "watchdog": _watchdog_check()}
+    return {
+        "regime": _detect_regime_and_notify(sym),
+        "watchdog": _watchdog_check(),
+        "pnl_snapshot": _record_pnl_snapshot(),
+    }

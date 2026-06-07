@@ -73,6 +73,17 @@ def _ex(fn: Callable[[], T]) -> T:
         raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
 
 
+def _parse_since(since: str | None) -> datetime | None:
+    """Parse an ISO date/datetime; naive values are treated as UTC. None -> no bound."""
+    if not since:
+        return None
+    try:
+        dt = datetime.fromisoformat(since)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 class StrategyReq(BaseModel):
     symbol: str = "BTCUSDT"
     strategy: str
@@ -82,6 +93,12 @@ class StrategyReq(BaseModel):
 class HaltReq(BaseModel):
     reason: str
     mode: str = "flat"  # flat | safe
+
+
+class CommentaryReq(BaseModel):
+    author: str = "analyst"
+    title: str | None = None
+    body: str
 
 
 @app.get("/manual", response_class=PlainTextResponse)
@@ -158,20 +175,28 @@ def market(symbol: str = "BTCUSDT", tf: str = "1h", limit: int = 200) -> dict:
 def positions() -> list[dict]:
     _require_key()
     raw = _ex(lambda: exchange.fetch_positions())
-    return [
-        {
-            "symbol": p.get("symbol"),
-            "side": p.get("side"),
-            "qty": p.get("contracts"),
-            "entry": p.get("entryPrice"),
-            "mark": p.get("markPrice"),
-            "upnl": p.get("unrealizedPnl"),
-            "stop": None,
-            "strategy": None,
-            "entry_reason": None,
-        }
-        for p in raw
-    ]
+    metas = store.open_positions_meta_map()  # DB row gives strategy/entry_reason/stop
+    out = []
+    for p in raw:
+        meta: dict = {}
+        for db_sym, m in metas.items():
+            if exchange._sym(db_sym) == p.get("symbol"):
+                meta = m
+                break
+        out.append(
+            {
+                "symbol": p.get("symbol"),
+                "side": p.get("side"),
+                "qty": p.get("contracts"),
+                "entry": p.get("entryPrice"),
+                "mark": p.get("markPrice"),
+                "upnl": p.get("unrealizedPnl"),
+                "stop": meta.get("stop_price"),
+                "strategy": meta.get("strategy"),
+                "entry_reason": meta.get("entry_reason"),
+            }
+        )
+    return out
 
 
 @app.get("/pnl")
@@ -222,3 +247,15 @@ def post_halt(req: HaltReq) -> dict:
 def heartbeat() -> dict:
     store.set_heartbeat()
     return {"ok": True, "watchdog_reset_at": datetime.now(timezone.utc).isoformat()}
+
+
+@app.post("/commentary")
+def post_commentary(req: CommentaryReq) -> dict:
+    """analyst pushes a User-facing market note. Harmless write, NOT a trading lever."""
+    cid = store.record_commentary(req.author, req.title, req.body)
+    return {"ok": True, "id": cid}
+
+
+@app.get("/commentary")
+def get_commentary(since: str | None = None, limit: int = 50) -> list[dict]:
+    return store.list_commentary(_parse_since(since), min(limit, 500))
