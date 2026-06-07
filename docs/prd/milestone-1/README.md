@@ -11,7 +11,7 @@
 | **1.1** | 全 roster + 護欄 + 雙向 dead-man：risk-monitor / reporter / reviewer + `mean_reversion` + `/envelope` + drawdown breaker + safe/flat + 完整雙向 heartbeat + `/commentary` + 下令紀律 | V2 + V3 + V6 + V7 | ⬜ 待開 | （待建） |
 | **1.2** | 耐久壓測 + 評估報告：多日 testnet run + 多標的籃子 + 量 V1/V4/V5/V8/V9 + 「swarm 能力邊界評估報告」 | V1–V9 全達 + 報告 | ⬜ 待開 | （待建） |
 
-> **Gate-2**（真錢 + Sunday 自服 dashboard + 四個 extras）是 **milestone-2**，通過 milestone-1 後才開。
+> **Gate-2**（真錢 + Sunday 自服 dashboard + 四個 extras）= **[milestone-2/](../milestone-2/)**。真錢（2.3）硬 gated，須 V1–V9 全達；但 **2.0 dashboard 是 testnet 純讀 + 一個無害寫入，可與 1.1 / 1.2 平行**——正好讓你在耐久 run 期間看得到 PnL / 權益 / 決策理由。
 
 ## 每個 sub-PRD 都繼承的不變量
 
