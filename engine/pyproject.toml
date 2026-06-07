@@ -1,0 +1,25 @@
+[project]
+name = "sunday-engine"
+version = "0.1.0"
+description = "Sunday — Binance USDⓈ-M perps trading engine, supervised by an evva swarm"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic-settings>=2.2",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.2",
+    "redis>=5.0",
+    "httpx>=0.27",
+    # used from T2+ (exchange adapter / indicators)
+    "ccxt>=4.3",
+    "pandas>=2.2",
+    "numpy>=1.26",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["sunday*"]
