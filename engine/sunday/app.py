@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, TypeVar
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from . import exchange, risk, store, strategy
@@ -24,6 +24,7 @@ from .config import settings
 
 log = logging.getLogger("sunday")
 _MANUAL = pathlib.Path(__file__).resolve().parent / "manual.md"
+_DASHBOARD = pathlib.Path(__file__).resolve().parent / "dashboard.html"
 
 T = TypeVar("T")
 _watcher_task: asyncio.Task | None = None
@@ -104,6 +105,12 @@ class CommentaryReq(BaseModel):
 @app.get("/manual", response_class=PlainTextResponse)
 def manual() -> str:
     return _MANUAL.read_text()
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard() -> str:
+    """Sunday-served execution dashboard (single self-contained page). D12: not in evva."""
+    return _DASHBOARD.read_text()
 
 
 @app.get("/status")
