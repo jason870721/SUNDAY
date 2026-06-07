@@ -279,3 +279,75 @@ def list_commentary(since=None, limit: int = 50) -> list[dict]:
                 (limit,),
             ).fetchall()
     return [{"ts": r[0].isoformat(), "author": r[1], "title": r[2], "body": r[3]} for r in rows]
+
+
+# --- dashboard read aggregations (milestone 2.0 / T2) ----------------------
+
+def equity_curve(since=None) -> list[list]:
+    """[[ts_ms, equity], ...] from pnl_snapshots, oldest first."""
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM ts)*1000, equity FROM pnl_snapshots"
+                " WHERE ts >= %s ORDER BY ts",
+                (since,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM ts)*1000, equity FROM pnl_snapshots ORDER BY ts"
+            ).fetchall()
+    return [[int(r[0]), float(r[1])] for r in rows]
+
+
+def performance(since=None) -> list[dict]:
+    """Per-strategy attribution from closed positions (+ open_qty from open ones)."""
+    clause = "AND closed_at >= %s" if since is not None else ""
+    params = (since,) if since is not None else ()
+    with pool.connection() as conn:
+        closed = conn.execute(
+            "SELECT strategy, COALESCE(SUM(realized_pnl),0), COUNT(*),"
+            " COUNT(*) FILTER (WHERE realized_pnl > 0), AVG(realized_pnl)"
+            f" FROM positions WHERE closed_at IS NOT NULL {clause} GROUP BY strategy",
+            params,
+        ).fetchall()
+        open_rows = conn.execute(
+            "SELECT strategy, COALESCE(SUM(qty),0) FROM positions"
+            " WHERE closed_at IS NULL GROUP BY strategy"
+        ).fetchall()
+    open_qty = {r[0]: float(r[1]) for r in open_rows}
+    out, seen = [], set()
+    for strat, realized, n, wins, avg in closed:
+        seen.add(strat)
+        out.append({
+            "strategy": strat,
+            "realized_pnl": round(float(realized), 4),
+            "n_trades": int(n),
+            "win_rate": round(wins / n, 4) if n else 0.0,
+            "avg_pnl": round(float(avg), 4) if avg is not None else 0.0,
+            "open_qty": open_qty.get(strat, 0.0),
+        })
+    for strat, qty in open_qty.items():  # strategies with only open (no closed) trades
+        if strat not in seen:
+            out.append({"strategy": strat, "realized_pnl": 0.0, "n_trades": 0,
+                        "win_rate": 0.0, "avg_pnl": 0.0, "open_qty": qty})
+    return out
+
+
+def strategy_history(since=None) -> list[dict]:
+    """strategy_state timeline (for the equity-curve switch overlay), oldest first."""
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM set_at)*1000, symbol, strategy, reason, set_by"
+                " FROM strategy_state WHERE set_at >= %s ORDER BY set_at",
+                (since,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM set_at)*1000, symbol, strategy, reason, set_by"
+                " FROM strategy_state ORDER BY set_at"
+            ).fetchall()
+    return [
+        {"set_at_ms": int(r[0]), "symbol": r[1], "strategy": r[2], "reason": r[3], "set_by": r[4]}
+        for r in rows
+    ]

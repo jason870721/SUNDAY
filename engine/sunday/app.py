@@ -12,7 +12,7 @@ import asyncio
 import logging
 import pathlib
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, TypeVar
 
 from fastapi import FastAPI, HTTPException
@@ -201,12 +201,46 @@ def positions() -> list[dict]:
 
 @app.get("/pnl")
 def pnl(since: str | None = None) -> dict:
-    _require_key()
-    bal = _ex(lambda: exchange.fetch_balance())
-    raw = _ex(lambda: exchange.fetch_positions())
-    unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in raw)
-    equity = (bal.get("total") or {}).get("USDT")
-    return {"realized": None, "unrealized": unrealized, "equity": equity, "equity_curve": []}
+    """Realized (DB) + live unrealized/equity (best-effort) + equity_curve (DB).
+
+    Read-only dashboard endpoint: curve + realized come from postgres and render
+    even if the exchange is unreachable; equity/unrealized are live extras.
+    """
+    since_dt = _parse_since(since)
+    if since_dt is None:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=30)
+        window_days = 30
+    else:
+        window_days = max(1, round((datetime.now(timezone.utc) - since_dt).total_seconds() / 86400))
+    curve = store.equity_curve(since_dt)
+    realized = store.realized_total(since_dt)
+    equity = unrealized = None
+    try:
+        bal = exchange.fetch_balance()
+        equity = (bal.get("total") or {}).get("USDT")
+        unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in exchange.fetch_positions())
+    except Exception:
+        if curve:
+            equity = curve[-1][1]
+    return {
+        "realized": round(realized, 4),
+        "unrealized": unrealized,
+        "equity": equity,
+        "equity_curve": curve,
+        "window_days": window_days,
+    }
+
+
+@app.get("/performance")
+def get_performance(since: str | None = None) -> list[dict]:
+    """Per-strategy attribution: realized_pnl / n_trades / win_rate / avg_pnl / open_qty."""
+    return store.performance(_parse_since(since))
+
+
+@app.get("/strategy_history")
+def get_strategy_history(since: str | None = None) -> list[dict]:
+    """Strategy-switch timeline (for the dashboard's reason overlay)."""
+    return store.strategy_history(_parse_since(since))
 
 
 @app.post("/strategy")
