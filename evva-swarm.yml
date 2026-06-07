@@ -15,5 +15,5 @@ workers:
   - agent: analyst # 市場 / regime 分析師（收事件或被指派時評估，給 friday 建議）
 
 settings:
-  permission_mode: default # 危險操作（含 curl）跳審批；唯讀 curl 由 .evva/permissions.json 放行
+  permission_mode: bypass # demo 階段 permit-all（不卡審批）；Sunday 端確定性風控 risk.py 仍兜底。正式驗證 A6 時改回 default（讀靠 .evva/permissions.json 放行、lever 跳審批）
   max_iterations: 50
