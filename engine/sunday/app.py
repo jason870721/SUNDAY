@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import pathlib
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Callable, TypeVar
@@ -29,6 +31,246 @@ _DASHBOARD = pathlib.Path(__file__).resolve().parent / "dashboard.html"
 T = TypeVar("T")
 _watcher_task: asyncio.Task | None = None
 
+SYMBOL = "BTCUSDT"            # Gate-1 single symbol (PRD §10 / milestone-1.0)
+TIMEFRAME = "1h"
+TICK_SECONDS = 60            # loop cadence; the strategy itself reads 1h bars
+WATCHDOG_MINUTES = 90       # no swarm heartbeat for this long → safe-mode (PRD §7.6)
+ENVELOPE = risk.DEFAULT_ENVELOPE
+
+
+@dataclass
+class EngineState:
+    mode: str = "flat"                       # flat | running | safe | halt
+    locked: bool = False                     # drawdown breaker latched
+    symbol: str = SYMBOL
+    peak_equity: float = 0.0
+    last_regime_label: str | None = None
+    last_event_ts: str | None = None
+    last_candles: Candles | None = None
+    stop: threading.Event = field(default_factory=threading.Event)
+
+
+state = EngineState()
+ex = BinanceUSDM.from_settings(settings)
+
+
+# --- request bodies --------------------------------------------------------
+
+class StrategyBody(BaseModel):
+    symbol: str = SYMBOL
+    strategy: str
+    reason: str | None = None
+    expected_current: str | None = None
+
+
+class HaltBody(BaseModel):
+    reason: str
+    mode: str = "safe"          # safe (freeze new) | flat (close all)
+
+
+# --- helpers ---------------------------------------------------------------
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _heartbeat_ok() -> bool:
+    last = store.last_heartbeat()
+    if last is None:
+        return False
+    return (_now() - last).total_seconds() < WATCHDOG_MINUTES * 60
+
+
+def _current_side() -> tuple[str | None, dict | None]:
+    """Book side from the exchange (truth), or None when flat/unreachable."""
+    try:
+        pos = ex.positions(state.symbol)
+    except ExchangeError:
+        return None, None
+    if not pos:
+        return None, None
+    return pos[0]["side"], pos[0]
+
+
+def _gather_status() -> dict:
+    strat_name = store.current_strategy(state.symbol)
+    candles = state.last_candles
+    rationale = None
+    if candles is not None:
+        try:
+            rationale = strategy.evaluate(strat_name, candles).rationale
+        except ValueError:
+            pass
+    side, pos = _current_side()
+    exposure = abs(float(pos["qty"]) * float(pos["mark"])) if pos else 0.0
+    equity = 0.0
+    try:
+        equity = ex.wallet_equity_usdt()
+    except ExchangeError:
+        pass
+    base = {
+        "alive": True,
+        "mode": state.mode,
+        "symbol": state.symbol,
+        "strategy": strat_name,
+        "strategy_rationale": rationale,
+        "position": pos,
+        "exposure_usd": exposure,
+        "leverage": (exposure / equity) if equity else 0.0,
+        "equity": equity,
+        "pnl_day": float(pos["upnl"]) if pos else 0.0,
+        "drawdown_pct": risk.drawdown_pct(equity, state.peak_equity),
+        "last_event_ts": state.last_event_ts,
+        "swarm_heartbeat_ok": _heartbeat_ok(),
+        "last_lever": store.last_lever(state.symbol),
+    }
+    return views.status_view(base, candles)
+
+
+def _fire(event: dict) -> None:
+    """Send a webhook and log it (never raises into the loop)."""
+    status, ok = events.post(settings.evva_webhook_url, event)
+    state.last_event_ts = _now().isoformat()
+    try:
+        store.record_webhook(event["data"]["event_type"], event.get("to") or "leader",
+                             event.get("title", ""), event.get("body", ""), status, None)
+    except Exception:  # logging a webhook must never break the loop
+        log.exception("record_webhook failed")
+
+
+# --- the trading loop ------------------------------------------------------
+
+def tick() -> None:
+    """One engine cycle. Wrapped by run_loop so a raised error degrades one tick."""
+    symbol = state.symbol
+    candles = ex.fetch_klines(symbol, TIMEFRAME, 200)
+    state.last_candles = candles
+
+    # 1) regime read → fire regime_shift only on a real change (PRD §5 event-gating)
+    rr = regime.classify(candles)
+    if regime.is_shift(state.last_regime_label, rr.label):
+        _fire(events.regime_shift_event(state.last_regime_label, rr, _gather_status()))
+    if rr.label != "unknown":
+        state.last_regime_label = rr.label
+
+    # 2) liveness: no swarm heartbeat → safe-mode floor (PRD §7.6 dead-man)
+    if not _heartbeat_ok() and state.mode not in ("safe", "halt"):
+        state.mode = "safe"
+        _fire(events.build_event("safe_mode_entered", title="Safe-mode entered",
+                                 body="swarm heartbeat 逾時，Sunday 凍結新倉（既有倉留 stop）。",
+                                 status=_gather_status(), to="leader"))
+
+    # 3) drawdown breaker (deterministic, non-LLM)
+    try:
+        equity = ex.wallet_equity_usdt()
+        state.peak_equity = max(state.peak_equity, equity)
+        dd = risk.check_drawdown(equity, state.peak_equity, ENVELOPE)
+        if dd.breached and not state.locked:
+            state.locked = True
+            _flatten(reason="drawdown breaker")
+            store.record_risk_event("drawdown", {"drawdown_pct": dd.drawdown_pct}, "flatten_and_lock")
+            _fire(events.build_event("risk_breach", title="Risk breach: drawdown",
+                                     body=dd.reason, status=_gather_status(), to="leader"))
+    except ExchangeError:
+        pass
+
+    # 4) act on the active strategy (unless frozen/locked)
+    if state.mode in ("safe", "halt") or state.locked:
+        return
+    state.mode = "running"
+    _reconcile(candles)
+
+
+def _reconcile(candles: Candles) -> None:
+    """Bring the book in line with the active strategy's target, risk-gated."""
+    symbol = state.symbol
+    strat_name = store.current_strategy(symbol)
+    target = strategy.target_side(strat_name, candles)
+    side, _ = _current_side()
+    action = execution.plan_transition(side, target)
+    if action == execution.HOLD:
+        return
+
+    vote = strategy.evaluate(strat_name, candles) if strat_name != "flat" else None
+    store.record_signal(symbol, strat_name, vote.indicators if vote else {}, action)
+    price = candles.last_close or 0.0
+
+    if action == execution.CLOSE or action.startswith("flip"):
+        _flatten(reason=f"{action} ({strat_name})")
+        if action == execution.CLOSE:
+            return
+
+    want = "long" if action in (execution.OPEN_LONG, execution.FLIP_LONG) else "short"
+    _open(symbol, want, price, strat_name, vote.rationale if vote else "")
+
+
+def _open(symbol: str, side: str, price: float, strat_name: str, reason: str) -> None:
+    """Size within the envelope, gate, then place market entry + native stop."""
+    ctx = risk.RiskContext(equity=_safe_equity(), current_exposure_usd=0.0)
+    qty = round(risk.max_allowed_qty(price, ctx, ENVELOPE), 3)
+    if qty <= 0:
+        return
+    order_side = "BUY" if side == "long" else "SELL"
+    stop_side = "SELL" if side == "long" else "BUY"
+    stop_price = round(price * (1 - ENVELOPE.stop_pct / 100) if side == "long"
+                       else price * (1 + ENVELOPE.stop_pct / 100), 2)
+
+    proposal = risk.OrderProposal(symbol, order_side, qty, price, has_stop=True, is_entry=True)
+    decision = risk.check_order(proposal, ctx, ENVELOPE)
+    if not decision.allowed:                       # the fuse (PRD §7.3 / V6)
+        store.record_risk_event(decision.type or "rejected", {"qty": qty, "price": price}, "reject_order")
+        log.warning("risk rejected entry: %s", decision.reason)
+        return
+    try:
+        resp = ex.market_order(symbol, order_side, qty)
+        ex.stop_market(symbol, stop_side, stop_price, qty)
+    except ExchangeError as e:
+        store.record_order(symbol, order_side, "MARKET", qty, price, "rejected", strat_name, reason)
+        log.warning("entry failed: %s", e)
+        return
+    oid = store.record_order(symbol, order_side, "MARKET", qty, price, "filled", strat_name, reason,
+                             str(resp.get("orderId")) if isinstance(resp, dict) else None)
+    store.record_fill(oid, symbol, qty, price, strat_name)
+    store.open_position(symbol, side, qty, price, stop_price, strat_name, reason)
+
+
+def _flatten(reason: str) -> None:
+    """Close the open position (reduce-only) and cancel resting orders."""
+    side, pos = _current_side()
+    try:
+        ex.cancel_all(state.symbol)
+        if pos:
+            close_side = "SELL" if side == "long" else "BUY"
+            ex.market_order(state.symbol, close_side, float(pos["qty"]), reduce_only=True)
+    except ExchangeError as e:
+        log.warning("flatten failed: %s", e)
+        return
+    for p in store.open_positions(state.symbol):
+        store.close_position(p["id"], float(pos["upnl"]) if pos else 0.0)
+
+
+def _safe_equity() -> float:
+    try:
+        return ex.wallet_equity_usdt()
+    except ExchangeError:
+        return 0.0
+
+
+def run_loop() -> None:
+    log.info("sunday loop start (symbol=%s tick=%ss)", state.symbol, TICK_SECONDS)
+    while not state.stop.wait(0):
+        try:
+            tick()
+        except ExchangeError as e:
+            _fire(events.engine_degraded_event(str(e)))
+        except Exception:
+            log.exception("tick error")
+        if state.stop.wait(TICK_SECONDS):
+            break
+    log.info("sunday loop stop")
+
+
+# --- app -------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -159,8 +401,7 @@ def status() -> dict:
 def health() -> dict:
     db_ok = redis_ok = True
     try:
-        assert store.pool is not None
-        with store.pool.connection() as conn:
+        with store._pool().connection() as conn:
             conn.execute("SELECT 1")
     except Exception:
         db_ok = False

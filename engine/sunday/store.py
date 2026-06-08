@@ -8,6 +8,7 @@ our attribution/audit record (modeling-grade).
 
 from __future__ import annotations
 
+import json
 import pathlib
 import time
 
@@ -21,6 +22,8 @@ _MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent.parent / "migrations"
 
 pool: ConnectionPool | None = None
 rds: redis.Redis | None = None
+
+_HEARTBEAT_KEY = "sunday:swarm_heartbeat_ts"
 
 
 def connect() -> None:
