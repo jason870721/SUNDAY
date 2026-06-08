@@ -1,6 +1,8 @@
 # Milestone 3 — 讓 agent 從「瞎子監督者」變「看得見、能閉迴路的監督者」
 
-> 狀態：**草案 / Draft（方向已定，待開工）** ｜ 日期：2026-06-08
+> 狀態：**已實作（2026-06-08）** — 引擎 M1.0+M3 folded、80 單元測試綠、swarm 設定就緒；
+> store/app 為薄 I/O（syntax-checked，待部署環境 integration/e2e 驗收，見 [`../../../RUNBOOK.md`](../../../RUNBOOK.md)）。
+> 原始狀態：草案 / Draft（方向已定）｜ 日期：2026-06-08
 > 上層 PRD：[`../prd/sunday-project-prd.md`](../sunday-project-prd.md)（§7.9 legibility、§7.10 下令紀律、§2.1 alpha 在切換政策）
 > 同層：[`../milestone-1/`](../milestone-1/)（Gate-1）、milestone-2（Gate-2，待建）
 > 觸發：2026-06-08 帶入 agent 視角實跑一輪 analyst（被 `regime_shift` 喚醒 → 照 skill `curl` 行情 → **手算 EMA20/EMA50** 才知道方向）所暴露的體驗缺口。
