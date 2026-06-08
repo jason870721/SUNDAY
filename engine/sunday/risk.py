@@ -101,6 +101,17 @@ def max_allowed_qty(price: float, ctx: RiskContext, env: Envelope = DEFAULT_ENVE
     return max(0.0, min(size_room, exposure_room, lev_room))
 
 
+def size_from_conviction(conviction: float, price: float, env: Envelope = DEFAULT_ENVELOPE,
+                         floor: float = 0.2) -> float:
+    """Directed sizing (milestone-4): conviction 0..1 → qty as a fraction of the single-
+    position cap. Below the floor → 0 (stay flat). Linear, deterministic, never exceeds
+    max_position_usd; the exposure/leverage caps still bind downstream in check_order."""
+    if price <= 0 or conviction < floor:
+        return 0.0
+    notional = min(max(conviction, 0.0), 1.0) * env.max_position_usd
+    return round(notional / price, 3)
+
+
 def drawdown_pct(equity: float, peak_equity: float) -> float:
     """Percent below the high-water mark; 0 at or above the peak."""
     if peak_equity <= 0:

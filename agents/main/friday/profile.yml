@@ -1,5 +1,5 @@
 # No `model:` — friday runs against your configured default provider/model.
 effort: high
-when_to_use: "交易團隊 CEO / 風險長 — 監督 Sunday 引擎，行使策略/halt lever，協調 analyst，對 User 負責。"
+when_to_use: "事件驅動永續台 desk lead / 風險長 — 看 /desk 派研究、綜合 thesis、行使 thesis/策略/halt lever、協調 analyst-flow/news 與 risk-monitor，對 User 負責。"
 inject_memory: false
 advertise_skills: true

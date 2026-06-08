@@ -6,6 +6,12 @@ agent (2026-06-08). They are authored here so the Sunday repo stays self-contain
 **to action them, copy each into `../evva/docs/roadmap/veronica/refine-plan/`** (next
 RP numbers) and open as evva work. Sunday is the *requester*, not the implementer.
 
+> **Status update (2026-06-08, milestone-4):**
+> - **RP-A (`http_request`) — SHIPPED in evva** (`pkg/tools/web/http.go`); the roster already uses it. Closed.
+> - **RP-B → filed as [evva RP-11](../../../../../evva/docs/roadmap/veronica/refine-plan/RP-11-event-routing-and-scoped-lever.md)** (event routing + scoped lever), reframed for the milestone-4 research desk.
+> - **RP-C → filed as [evva RP-12](../../../../../evva/docs/roadmap/veronica/refine-plan/RP-12-advice-loop-closure.md)** (advice-loop closure), now load-bearing (the desk *is* leader-synthesizes-advice).
+> The drafts below are kept for provenance; the filed evva RPs are authoritative.
+
 | draft | theme | one line |
 | --- | --- | --- |
 | [RP-A](RP-A-http-request-tool.md) | ergonomics | promote a generic `http_request` tool — `curl→python` is the agent's #1 error source |

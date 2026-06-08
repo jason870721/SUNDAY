@@ -52,13 +52,46 @@ def fetch_ticker(symbol: str) -> dict:
     return exchange().fetch_ticker(_sym(symbol))
 
 
+def _f(v) -> float | None:
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def fetch_funding_rate(symbol: str) -> float | None:
     """Current perp funding rate as a per-8h fraction (positive = longs pay shorts).
     A perps-specific edge the advisor factors in. None on unsupported/error."""
     try:
         fr = exchange().fetch_funding_rate(_sym(symbol))
-        rate = fr.get("fundingRate")
-        return float(rate) if rate is not None else None
+        return _f(fr.get("fundingRate"))
+    except Exception:
+        return None
+
+
+def fetch_funding_info(symbol: str) -> dict:
+    """funding rate (per-8h) + mark/index price — for the info layer (basis = mark vs index).
+    All fields None-tolerant (testnet sometimes omits them)."""
+    try:
+        fr = exchange().fetch_funding_rate(_sym(symbol))
+        return {"rate": _f(fr.get("fundingRate")), "mark": _f(fr.get("markPrice")), "index": _f(fr.get("indexPrice"))}
+    except Exception:
+        return {"rate": None, "mark": None, "index": None}
+
+
+def fetch_open_interest(symbol: str) -> float | None:
+    """Open interest (USD value preferred, else contract amount). None on unsupported/error."""
+    try:
+        oi = exchange().fetch_open_interest(_sym(symbol))
+        return _f(oi.get("openInterestValue")) or _f(oi.get("openInterestAmount"))
+    except Exception:
+        return None
+
+
+def fetch_last_price(symbol: str) -> float | None:
+    """Last traded price (for the buy-hold shadow baseline). None on error."""
+    try:
+        return _f(fetch_ticker(symbol).get("last"))
     except Exception:
         return None
 

@@ -1,17 +1,25 @@
 # Sunday 操作手冊（`GET /manual`）
 
-Sunday 是一個 Binance USDⓈ-M 永續 **testnet** 交易引擎。它自己偵測訊號、下單、平倉、跑確定性風險熔斷；
-你（swarm agent）的工作是**監督**它：查狀態、在 regime 改變時切策略、必要時叫停。
-用通用 `bash` + `curl` 操作。base = `http://127.0.0.1:7777`。
+Sunday 是一個 Binance USDⓈ-M 永續 **testnet** 執行/風險/資訊基板。它自己下單/平倉、跑確定性風險熔斷、ingest 資訊層；
+你（swarm 研究台）的工作是**經營決策**：看 `/desk` 哪裡有事 → 研究 → 下 **thesis**（方向+信念）驅動 `directed` 執行，必要時叫停。
+用 **`http_request`** 工具操作（GET 免審批；lever POST 跳審批，僅 leader）。base = `http://127.0.0.1:7777`。籃子 = `BTCUSDT, ETHUSDT, SOLUSDT`（1h）。
 
-> **策略**：`momentum` / `mean_reversion` / `flat`（單一標的 `BTCUSDT`、1h）。切策略前先查決策支援面板 `GET /advisor`。
-> **milestone 2.0（dashboard）**：`/pnl` 回真實 `equity_curve`、新增 `/performance`·`/strategy_history`·`/commentary`，並自服一頁 `/dashboard`。
+> **策略**：`directed`（thesis 驅動，milestone-4 主用）/ `momentum` / `mean_reversion` / `flat`。研究先看 `GET /desk` 與 `GET /advisor`。
+> **〔milestone-4〕** 資訊層 `/desk`（funding/OI/基差 + notable score）、thesis 帳本 `/thesis`·`/theses`、ablation `/ablation`；dashboard 自服於 `/dashboard`。
 
 ## 唯讀（auto-allow，不需審批）
 
 ```bash
+# ★★ 研究台「此刻看哪裡」：全籃子 notable 排序（funding/OI/基差 + notable score）
+curl -s http://127.0.0.1:7777/desk
+# 單標的深掘（+ advisor：regime / votes / funding context）
+curl -s "http://127.0.0.1:7777/desk?symbol=BTCUSDT"
+
+# 當前 active thesis（驅動 directed 執行）/ thesis 史 + 結果（outcome 歸因）
+curl -s "http://127.0.0.1:7777/thesis?symbol=BTCUSDT"
+curl -s "http://127.0.0.1:7777/theses?limit=20"
+
 # ★ 決策支援面板：每策略此刻的投票 + 指標 + regime + funding（永續資金費）+ 建議策略
-#   （切策略前先看這個，別自己算 EMA/RSI）
 curl -s "http://127.0.0.1:7777/advisor?symbol=BTCUSDT"
 
 # 整體狀態（含當值策略 + 理由 + 倉位 + 曝險）
@@ -37,6 +45,15 @@ curl -s "http://127.0.0.1:7777/commentary?limit=20"
 
 # 當前風險封套（active caps；未設過則回 config 預設）
 curl -s http://127.0.0.1:7777/envelope
+
+# 風險面板：封套 vs 即時讀數 + 各上限使用率 + 當前違規 + 近期確定性熔斷事件
+curl -s http://127.0.0.1:7777/risk
+
+# 成交帳本 / blotter（orders，時間倒序）
+curl -s "http://127.0.0.1:7777/trades?limit=50"
+
+# Sunday 對 swarm 發過的喚醒事件（webhook_log：regime_shift / risk_breach / …）
+curl -s "http://127.0.0.1:7777/events?limit=50"
 ```
 
 ## 市場動態 commentary（analyst 專用；無害寫入、auto-allow、非交易 lever）
@@ -50,15 +67,24 @@ curl -sX POST http://127.0.0.1:7777/commentary \
 
 ## Dashboard（User 在瀏覽器看；Sunday 自服）
 
-`http://127.0.0.1:7777/dashboard` —— 權益曲線 + 切換理由疊圖、30 日 PnL、倉位、per-strategy 歸因、commentary feed，自動刷新。
+`http://127.0.0.1:7777/dashboard` —— 專業量化終端風格 Web UI（Vue，Sunday 自服）。五區：
+**Overview**（KPI / 權益曲線 + 切換理由疊圖 / 倉位 / advisor）、**Strategy**（advisor 決策面板 + 切策略 lever + 行情圖）、
+**Risk**（封套編輯 + 使用率 + 風控事件）、**Reports**（commentary + 決策/事件時間軸）、**Manual**（本手冊 + API console）。
+User 由此能行使與 agent 等價的全部操作（lever 經同一組端點，確定性風控仍是最終防線）。
 
 ## Lever（POST；需 permission 審批；僅 leader）
 
 ```bash
-# 切換當值策略（reason 必填，會留存給 User）
+# 〔milestone-4〕下 thesis（desk lead 的主要手段）：方向 + 信念，驅動 directed 確定性執行。
+#   conviction 0..1 → 倉位大小（封套內，<0.2 視為 flat）；invalidation_price → stop；rationale 必填。
+curl -sX POST http://127.0.0.1:7777/thesis \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTCUSDT","direction":"long","conviction":0.4,"rationale":"funding 轉負、無迫近事件","invalidation":"跌破 4h 支撐","invalidation_price":60000}'
+
+# 切換當值策略（reason 必填）：directed（thesis 驅動）/ momentum / mean_reversion / flat
 curl -sX POST http://127.0.0.1:7777/strategy \
   -H 'Content-Type: application/json' \
-  -d '{"symbol":"BTCUSDT","strategy":"momentum","reason":"analyst 判趨勢偏多"}'
+  -d '{"symbol":"BTCUSDT","strategy":"directed","reason":"轉由 thesis 驅動"}'
 
 # 叫停：mode=flat 全平、mode=safe 凍新倉（既有倉留 stop）
 curl -sX POST http://127.0.0.1:7777/halt \
@@ -84,7 +110,8 @@ Sunday 連續一段時間（預設 90m）收不到 heartbeat → 自動停開新
 - `momentum`：EMA20 × EMA50 cross（1h）順勢開多/空（趨勢盤）。
 - `mean_reversion`：布林帶 z + RSI14。超賣（z≤-1 且 RSI≤35）偏多、超買（z≥1 且 RSI≥65）偏空（震盪盤）。
 - `flat`：空手（既有倉平掉）。
-- **不確定切哪個？查 `GET /advisor`** —— 每策略投票 + regime（trending/ranging/volatile）+ funding + 建議策略，照它決定。
+- `directed`〔milestone-4〕：由當前 **thesis** 驅動（方向 + conviction）；Sunday 確定性決定倉位大小（conviction × 單筆上限）、依 `invalidation_price` 掛 stop、自動進出。swarm 用 `POST /thesis` 設定，是研究台的主用模式。
+- **研究先看 `GET /desk`（此刻哪裡有事）＋ `GET /advisor`（單標的投票/regime/funding）。**
 
 ## 風險封套（確定性、Python 層硬擋）
 

@@ -1,26 +1,30 @@
 name: sunday              # → webhook endpoint POST /api/swarm/sunday/event
 workdir: .
 
+# milestone-4 research desk: friday(desk lead) + analyst-flow/analyst-news (parallel
+# specialist coverage) + risk-monitor (adversarial) + reviewer (post-mortem/playbook).
+# friday alone pulls levers (thesis/strategy/halt); the rest advise via send_message.
+
 leader:
   agent: friday
   schedule:
     every: 30m
-    prompt: "Dead-man check：POST /heartbeat + 查 /status。Sunday 活著嗎？PnL/曝險在封套內嗎？無異常就回報並 stand down。"
+    prompt: "Dead-man check：POST /heartbeat + 查 /status·/desk。Sunday 活著嗎？封套內嗎？籃子有沒有 notable 標的值得開一輪研究？無事就回報並 stand down。"
 
 workers:
-  - agent: analyst
+  - agent: analyst-flow          # event-driven only (woken by funding_extreme / oi_surge / basis_stretch)
+  - agent: analyst-news
+    schedule:
+      every: 30m
+      prompt: "掃 /desk 看籃子有無 notable 標的或迫近事件；有就用 web 讀新聞判讀、send_message 給 friday（方向+conviction+事件風險+來源）。沒事 stand down。"
   - agent: risk-monitor
     schedule:
       every: 30m
-      prompt: "稀疏風控 audit：查 /status·/positions 對照封套，有違規或逼近上限即 send_message 給 friday。沒事 stand down。"
-  - agent: reporter
-    schedule:
-      every: 1h
-      prompt: "產出狀態快照（查 /status、/pnl、/positions），send_message 給 friday。"
+      prompt: "風控 audit：查 /risk 對照封套，違規或逼近上限即 send_message 警告 friday（必要時建議 halt）。沒事 stand down。"
   - agent: reviewer
     schedule:
       cron: "0 17 * * *"
-      prompt: "當日復盤：查 /performance、/strategy_history、/pnl，總結當日操作 + 策略建議交 friday。"
+      prompt: "當日復盤：查 /theses·/performance·/pnl·/ablation，歸因 thesis 結果 + 寫 playbook commentary（author:reviewer）+ 交 friday 1-2 條改進建議。"
 
 settings:
   # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.

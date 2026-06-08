@@ -1,0 +1,5 @@
+# No `model:` — runs against your configured default provider/model.
+effort: high
+when_to_use: "News 分析師 — catalyst/新聞事件或 friday 指派時，用 web 工具讀新聞/事件/敘事，回報方向 + conviction + 事件風險。"
+inject_memory: false
+advertise_skills: true

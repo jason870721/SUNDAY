@@ -24,7 +24,10 @@ from . import indicators as ind
 from .market import Candles
 
 # The selectable strategies (the `/strategy` lever's vocabulary).
-VALID_STRATEGIES: tuple[str, ...] = ("momentum", "mean_reversion", "flat")
+# `directed` (milestone-4): target comes from the symbol's active thesis, not the tape —
+# the engine special-cases it (see engine._reconcile_directed); momentum/mean_reversion
+# stay as the ablation baseline + info-OFF comparison.
+VALID_STRATEGIES: tuple[str, ...] = ("momentum", "mean_reversion", "flat", "directed")
 # The candidates that actually express a market view (flat is the no-position floor).
 CANDIDATES: tuple[str, ...] = ("momentum", "mean_reversion")
 STRATEGIES = set(VALID_STRATEGIES)  # back-compat alias for callers that membership-test
@@ -93,6 +96,8 @@ def evaluate(strategy: str, candles: Candles, fast: int = 20, slow: int = 50) ->
     """The active strategy's read of this tape. Pure; params are injectable."""
     if strategy == "flat":
         return Vote("flat", "neutral", 1.0, {}, "flat：空手（不進場）")
+    if strategy == "directed":  # thesis-driven; the engine reads the thesis, not the tape
+        return Vote("directed", "neutral", 0.0, {}, "directed：由 thesis 驅動（見引擎 _reconcile_directed）")
     if strategy == "momentum":
         return _momentum(candles, fast, slow)
     if strategy == "mean_reversion":

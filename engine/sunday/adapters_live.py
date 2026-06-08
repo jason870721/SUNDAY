@@ -108,17 +108,24 @@ class LiveLedger:
     def record_order(self, symbol, side, type_, qty, price, status, exchange_order_id, strategy, intent) -> None:
         store.record_order(symbol, side, type_, qty, price, status, exchange_order_id, strategy, intent)
 
-    def record_position_open(self, symbol, side, qty, entry, stop, strategy, entry_reason) -> None:
-        store.record_position_open(symbol, side, qty, entry, stop, strategy, entry_reason)
+    def record_position_open(self, symbol, side, qty, entry, stop, strategy, entry_reason,
+                             thesis_id=None) -> None:
+        store.record_position_open(symbol, side, qty, entry, stop, strategy, entry_reason, thesis_id)
 
     def record_risk_event(self, type_: str, detail: dict, action_taken: str) -> None:
         store.record_risk_event(type_, detail, action_taken)
 
-    def get_last_regime(self) -> str | None:
-        return store.get_last_regime()
+    def current_thesis(self, symbol: str) -> dict | None:
+        return store.current_thesis(symbol)
 
-    def set_last_regime(self, regime: str) -> None:
-        store.set_last_regime(regime)
+    def close_thesis(self, thesis_id: int, status: str, outcome_pnl=None, outcome_note=None) -> None:
+        store.close_thesis(thesis_id, status, outcome_pnl, outcome_note)
+
+    def get_last_regime(self, symbol: str) -> str | None:
+        return store.get_last_regime(symbol)
+
+    def set_last_regime(self, symbol: str, regime: str) -> None:
+        store.set_last_regime(symbol, regime)
 
     def heartbeat_age(self) -> float | None:
         return store.heartbeat_age()
