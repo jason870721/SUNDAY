@@ -2,5 +2,6 @@
 # list_members, schedule_set/clear) are injected automatically by the leader role —
 # do NOT list them here.
 - http_request  # operate Sunday over its HTTP API; GET/HEAD auto-allow, lever POSTs ask
+- web_search
 - web_fetch     # pull external context when judging the market
 - skill
