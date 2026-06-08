@@ -3,3 +3,4 @@
 - http_request  # read Sunday over its HTTP API + POST /commentary (read-only on levers)
 - web_fetch     # external market context (news / sentiment)
 - web_search
+- skill
