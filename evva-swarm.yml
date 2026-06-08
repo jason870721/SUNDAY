@@ -1,0 +1,16 @@
+name: sunday              # → webhook endpoint POST /api/swarm/sunday/event
+workdir: .
+
+leader:
+  agent: friday
+  schedule:
+    every: 30m
+    prompt: "Dead-man check：POST /heartbeat + 查 /status。Sunday 活著嗎？PnL/曝險在封套內嗎？無異常就回報並 stand down。"
+
+workers:
+  - agent: analyst
+
+settings:
+  # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.
+  permission_mode: default
+  max_iterations: 50

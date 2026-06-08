@@ -1,0 +1,6 @@
+# No `model:` pin — friday runs against your configured default provider/model.
+# (Pin e.g. `model: claude-sonnet-4-6` here if you want a stronger tier for the leader.)
+effort: high
+when_to_use: "交易團隊 CEO — 監督 Sunday、行使三個 lever（切策略 / 設封套 / kill）、風險最終決策。"
+inject_memory: false
+advertise_skills: true     # required so the operate-sunday skill enters the prompt (RP-10)
