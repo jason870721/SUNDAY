@@ -1,225 +1,239 @@
-"""Live engine glue — the IO-bound trading loop, built on the pure core.
+"""The engine loop — pure-ish orchestration over injected ports.
 
-The *decisions* are pure and tested elsewhere:
-  - what side the strategy wants  → strategy.target_side(candles)
-  - hold / open / close / flip     → execution.plan_transition(current, target)
-  - may this order pass the caps?  → risk.check_order(...)
-  - has drawdown breached?         → risk.check_drawdown(...)
+`Engine` holds the ports (market / broker / ledger / sink / clock) + an
+`EngineConfig` and runs the supervision loop: read the tape → pure decision
+(strategy.target_side, execution.plan_transition) → apply to the book under the
+deterministic risk fuses (risk.check_order / check_drawdown). It imports only the
+PURE core + ports + stdlib (NOT config/exchange/store), so the whole loop is
+unit-testable with fakes — which is exactly what the Gate-2 backtest does: a sim
+broker is just a richer Broker fake.
 
-This module is the one place that talks to the outside world (ccxt exchange,
-postgres/redis store, webhook). It fetches the candles, runs the pure decisions,
-and applies the result to the live book under the deterministic risk fuses. The
-Gate-2 backtest reuses the SAME pure decisions against a sim broker; this file is
-the *live adapter wiring* that the sim path will mirror. (G2.1 next step: lift the
-exchange/store/clock behind injected ports so engine.* is itself backtestable.)
+`live()` lazily wires the ccxt/postgres/webhook adapters; the module-level
+`reconcile/halt/tick` delegate to it, so app.py needs no knowledge of the ports.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
 
-from . import events, exchange, execution, regime, risk, store, strategy
-from .config import settings
+from . import events, execution, ports, regime, risk, strategy
 from .market import Candles
 
 log = logging.getLogger("sunday")
 
 
-def envelope() -> risk.Envelope:
-    """The live hard caps, from settings (the leader's /envelope lever will set these)."""
-    return risk.Envelope(
-        max_position_usd=settings.max_position_usd,
-        max_total_exposure_usd=settings.max_total_exposure_usd,
-        max_leverage=settings.max_leverage,
-        max_drawdown_pct=settings.max_drawdown_pct,
-        stop_pct=settings.stop_pct,
+@dataclass
+class EngineConfig:
+    """The engine's tunables — a plain value object (NOT the pydantic settings), so
+    the engine has no config/IO import and a backtest can pass its own."""
+    symbol: str = "BTCUSDT"
+    timeframe: str = "1h"
+    candles_limit: int = 200          # bars pulled per decision (≥ slow + warmup)
+    fast: int = 20
+    slow: int = 50
+    target_notional_usd: float = 500.0
+    leverage: int = 3
+    envelope: risk.Envelope = field(default_factory=risk.Envelope)
+    webhook_url: str = ""
+    heartbeat_timeout_sec: int = 5400
+
+
+_ACTION_LABEL = {"long": "open_long", "short": "open_short", None: "go_flat"}
+
+
+class Engine:
+    def __init__(self, market: ports.MarketData, broker: ports.Broker, ledger: ports.Ledger,
+                 sink: ports.EventSink, clock: ports.Clock, cfg: EngineConfig) -> None:
+        self.market = market
+        self.broker = broker
+        self.ledger = ledger
+        self.sink = sink
+        self.clock = clock
+        self.cfg = cfg
+
+    # --- helpers ----------------------------------------------------------
+
+    def _status_snapshot(self, symbol: str) -> dict:
+        try:
+            return {"mode": self.ledger.get_mode(), "strategy": self.ledger.current_strategy(symbol)}
+        except Exception:
+            return {}
+
+    def notify(self, event: dict) -> object:
+        """Fire a webhook event through the sink (post + log live; collect in sim)."""
+        return self.sink.emit(event)
+
+    # --- lever paths (called by app.py via the live singleton) ------------
+
+    def reconcile(self, symbol: str, set_by: str = "system") -> dict:
+        """Make the book match the active strategy's target (pure decision, live effects)."""
+        strat = self.ledger.current_strategy(symbol)
+        candles = self.market.ohlcv(symbol, self.cfg.timeframe, self.cfg.candles_limit)
+        vote = strategy.evaluate(strat, candles, self.cfg.fast, self.cfg.slow)
+        target = vote.vote if vote.vote in ("long", "short") else None
+        self.ledger.record_signal(symbol, strat, vote.indicators, _ACTION_LABEL[target])
+        self.ledger.set_rationale(vote.rationale)
+
+        current = self.broker.current_side(symbol)
+        action = execution.plan_transition(current, target)
+        if action == execution.HOLD:
+            return {"action": "noop", "side": current, "rationale": vote.rationale}
+
+        if action in (execution.CLOSE, execution.FLIP_LONG, execution.FLIP_SHORT):
+            realized = self.broker.capture_realized(symbol)
+            self.broker.close(symbol)
+            self.broker.cancel_stops(symbol)
+            self.ledger.close_open_positions(symbol, realized_pnl=realized)
+
+        if target is None:
+            return {"action": "flat", "rationale": vote.rationale}
+
+        mode = self.ledger.get_mode()
+        if mode in ("safe", "halted"):                 # frozen: no new entries
+            return {"action": "frozen_no_entry", "mode": mode, "rationale": vote.rationale}
+
+        return self._open(symbol, target, strat, vote.rationale)
+
+    def _open(self, symbol: str, side: str, strat: str, reason: str) -> dict:
+        price = self.market.ticker(symbol)
+        qty = round(self.cfg.target_notional_usd / price, 3)
+        order = risk.OrderProposal(symbol, "buy" if side == "long" else "sell", qty, price,
+                                   has_stop=True, is_entry=True)
+        ctx = risk.RiskContext(equity=self.broker.equity(), current_exposure_usd=self.broker.exposure_usd())
+        decision = risk.check_order(order, ctx, self.cfg.envelope)
+        if not decision.allowed:                       # final line of defence — blocks any over-line order
+            self.ledger.record_risk_event(decision.type or "rejected",
+                                          {"symbol": symbol, "qty": qty, "price": price,
+                                           "violations": decision.violations}, action_taken="order_rejected")
+            raise risk.RiskRejected(f"{decision.type}: {decision.violations}")
+
+        self.broker.set_leverage(symbol, self.cfg.leverage)
+        od = self.broker.place_market(symbol, order.side, qty)
+        self.ledger.record_order(symbol, order.side, "market", qty, price, od.get("status") or "new",
+                                 str(od.get("id")), strat, reason)
+        stop_px = risk.stop_price(side, price, self.cfg.envelope.stop_pct)
+        self.broker.set_stop(symbol, "sell" if side == "long" else "buy", qty, stop_px)
+        self.ledger.record_position_open(symbol, side, qty, price, stop_px, strat, reason)
+        return {"action": f"opened_{side}", "qty": qty, "entry": price, "stop": stop_px, "rationale": reason}
+
+    def halt(self, mode: str, reason: str) -> dict:
+        """flat = close everything + cancel stops; safe = freeze new entries."""
+        if mode == "flat":
+            realized = self.broker.capture_realized(self.cfg.symbol)
+            self.broker.close(self.cfg.symbol)
+            self.broker.cancel_stops(self.cfg.symbol)
+            self.ledger.close_open_positions(self.cfg.symbol, realized_pnl=realized)
+            self.ledger.set_strategy(self.cfg.symbol, "flat", f"halt(flat): {reason}", "system")
+            self.ledger.set_mode("halted")
+        elif mode == "safe":
+            self.ledger.set_mode("safe")
+        return {"mode": self.ledger.get_mode()}
+
+    # --- watcher tick -----------------------------------------------------
+
+    def _detect_regime_and_notify(self, symbol: str) -> dict:
+        try:
+            candles = self.market.ohlcv(symbol, self.cfg.timeframe, self.cfg.candles_limit)
+        except Exception as e:  # market/indicator failure → tell the leader
+            self.notify(events.engine_degraded_event(f"無法取得行情/指標：{e}"))
+            return {"degraded": str(e)}
+        rr = regime.classify(candles)
+        prev = self.ledger.get_last_regime()
+        if regime.is_shift(prev, rr.label):
+            self.ledger.set_last_regime(rr.label)
+            self.notify(events.regime_shift_event(prev, rr, status=self._status_snapshot(symbol)))
+            return {"regime": rr.label, "shifted": True, "prev": prev}
+        if prev is None and rr.label != "unknown":
+            self.ledger.set_last_regime(rr.label)  # baseline, no emit
+        return {"regime": rr.label, "shifted": False}
+
+    def _watchdog_check(self) -> dict:
+        age = self.ledger.heartbeat_age()
+        if age is not None and age > self.cfg.heartbeat_timeout_sec and self.ledger.get_mode() == "active":
+            self.ledger.set_mode("safe")
+            self.notify(events.safe_mode_event(
+                f"swarm heartbeat 逾時 {int(age)}s（>{self.cfg.heartbeat_timeout_sec}s），凍結新倉",
+                status=self._status_snapshot(self.cfg.symbol)))
+            return {"safe_mode": True, "age": age}
+        return {"safe_mode": False, "age": age}
+
+    def _record_pnl_snapshot(self) -> dict:
+        """One equity-curve point + the deterministic drawdown breaker (PRD §7.3)."""
+        try:
+            equity = self.broker.equity()
+            unrealized = self.broker.unrealized_total()
+        except Exception as e:
+            return {"recorded": False, "error": str(e)}
+        realized = self.ledger.realized_total()
+        peak = self.ledger.equity_peak()
+        peak = max(peak, equity) if peak is not None else equity
+        dd = risk.check_drawdown(equity, peak, self.cfg.envelope)
+        self.ledger.record_pnl_snapshot(equity, realized, unrealized, dd.drawdown_pct)
+        if dd.breached and self.ledger.get_mode() == "active":  # flatten + lock, then alert
+            self.halt("flat", f"drawdown {dd.drawdown_pct:.2f}% ≥ {self.cfg.envelope.max_drawdown_pct}%")
+            self.ledger.record_risk_event("drawdown",
+                                          {"equity": equity, "peak": peak, "drawdown_pct": dd.drawdown_pct},
+                                          action_taken=dd.action or "flatten_and_lock")
+            self.notify(events.risk_breach_event(
+                f"drawdown {dd.drawdown_pct:.2f}% 觸發熔斷，已 flatten+lock",
+                status=self._status_snapshot(self.cfg.symbol)))
+        return {"recorded": True, "equity": equity, "drawdown_pct": dd.drawdown_pct, "breached": dd.breached}
+
+    def tick(self) -> dict:
+        """One periodic self-check (regime + watchdog + equity snapshot)."""
+        sym = self.cfg.symbol
+        return {
+            "regime": self._detect_regime_and_notify(sym),
+            "watchdog": self._watchdog_check(),
+            "pnl_snapshot": self._record_pnl_snapshot(),
+        }
+
+
+# --- live wiring (lazy: only builds the heavy ccxt/pg/webhook adapters on demand) ---
+
+_live: Engine | None = None
+
+
+def _config_from_settings(settings) -> EngineConfig:
+    return EngineConfig(
+        symbol=settings.symbol,
+        timeframe=settings.timeframe,
+        candles_limit=settings.ema_slow + 50,
+        fast=settings.ema_fast,
+        slow=settings.ema_slow,
+        target_notional_usd=settings.target_notional_usd,
+        leverage=settings.leverage,
+        envelope=risk.Envelope(
+            max_position_usd=settings.max_position_usd,
+            max_total_exposure_usd=settings.max_total_exposure_usd,
+            max_leverage=settings.max_leverage,
+            max_drawdown_pct=settings.max_drawdown_pct,
+            stop_pct=settings.stop_pct,
+        ),
+        webhook_url=settings.evva_webhook_url,
+        heartbeat_timeout_sec=settings.heartbeat_timeout_sec,
     )
 
 
-def _candles(symbol: str, limit: int | None = None) -> Candles:
-    n = limit or (settings.ema_slow + 50)
-    return Candles.from_klines(exchange.fetch_ohlcv(symbol, settings.timeframe, n))
+def live() -> Engine:
+    """The process-wide live engine (ccxt + postgres/redis + webhook adapters)."""
+    global _live
+    if _live is None:
+        from .adapters_live import CcxtBroker, CcxtMarket, LiveLedger, WallClock, WebhookSink
+        from .config import settings
+        cfg = _config_from_settings(settings)
+        _live = Engine(CcxtMarket(), CcxtBroker(), LiveLedger(), WebhookSink(cfg.webhook_url), WallClock(), cfg)
+    return _live
 
-
-def _current_side(symbol: str) -> str | None:
-    """Live book side for `symbol`: 'long' | 'short' | None (flat)."""
-    for p in exchange.fetch_positions():
-        if p["symbol"] == exchange._sym(symbol) and p.get("contracts"):
-            return p["side"]
-    return None
-
-
-def _exposure_usd() -> float:
-    total = 0.0
-    for p in exchange.fetch_positions():
-        if p.get("contracts"):
-            total += abs(float(p["contracts"]) * float(p.get("markPrice") or p.get("entryPrice") or 0))
-    return total
-
-
-def _capture_realized(symbol: str) -> float:
-    """unrealizedPnl of open positions — the realized PnL the instant we close them."""
-    total = 0.0
-    for p in exchange.fetch_positions():
-        if p["symbol"] == exchange._sym(symbol) and p.get("contracts"):
-            total += float(p.get("unrealizedPnl") or 0)
-    return total
-
-
-def _equity() -> float:
-    bal = exchange.fetch_balance()
-    return float((bal.get("total") or {}).get("USDT") or 0.0)
-
-
-def _status_snapshot(symbol: str) -> dict:
-    """A tiny status blob for self-sufficient webhook payloads (best-effort)."""
-    try:
-        return {"mode": store.get_mode(), "strategy": store.current_strategy(symbol)}
-    except Exception:
-        return {}
-
-
-def notify(event: dict) -> dict:
-    """Fire a webhook event (built by events.*), log it to webhook_log, stamp last_event. Never raises."""
-    http_status, ok = events.post(settings.evva_webhook_url, event)
-    data = event.get("data") or {}
-    store.record_webhook(data.get("event_type") or "event", event.get("to") or "leader",
-                         event.get("title"), event.get("body"), http_status, None)
-    store.set_last_event_ts(datetime.now(timezone.utc).isoformat())
-    return {"event_type": data.get("event_type"), "http_status": http_status, "ok": ok}
-
-
-# --- lever paths (called by app.py) ----------------------------------------
 
 def reconcile(symbol: str, set_by: str = "system") -> dict:
-    """Make the live book match the active strategy's target (pure decisions, live effects)."""
-    strat = store.current_strategy(symbol)
-    candles = _candles(symbol)
-    vote = strategy.evaluate(strat, candles)
-    target = strategy.target_side(strat, candles)          # 'long' | 'short' | None
-    store.record_signal(symbol, strat, vote.indicators,
-                        {"long": "open_long", "short": "open_short", None: "go_flat"}[target])
-    store.set_rationale(vote.rationale)
-
-    current = _current_side(symbol)
-    action = execution.plan_transition(current, target)
-    if action == execution.HOLD:
-        return {"action": "noop", "side": current, "rationale": vote.rationale}
-
-    if action in (execution.CLOSE, execution.FLIP_LONG, execution.FLIP_SHORT):
-        realized = _capture_realized(symbol)
-        exchange.close_position(symbol)
-        exchange.cancel_all_orders(symbol)
-        store.close_open_positions(symbol, realized_pnl=realized)
-
-    if target is None:
-        return {"action": "flat", "rationale": vote.rationale}
-
-    mode = store.get_mode()
-    if mode in ("safe", "halted"):                          # frozen: no new entries
-        return {"action": "frozen_no_entry", "mode": mode, "rationale": vote.rationale}
-
-    return _open(symbol, target, strat, vote.rationale)
-
-
-def _open(symbol: str, side: str, strat: str, reason: str) -> dict:
-    price = float(exchange.fetch_ticker(symbol)["last"])
-    qty = round(settings.target_notional_usd / price, 3)
-    order = risk.OrderProposal(symbol, "buy" if side == "long" else "sell", qty, price,
-                               has_stop=True, is_entry=True)
-    ctx = risk.RiskContext(equity=_equity(), current_exposure_usd=_exposure_usd())
-    decision = risk.check_order(order, ctx, envelope())
-    if not decision.allowed:                                # final line of defence — blocks any over-line order
-        store.record_risk_event(decision.type or "rejected",
-                                {"symbol": symbol, "qty": qty, "price": price, "violations": decision.violations},
-                                action_taken="order_rejected")
-        raise risk.RiskRejected(f"{decision.type}: {decision.violations}")
-
-    exchange.set_leverage(symbol, settings.leverage)
-    od = exchange.place_market(symbol, order.side, qty)
-    store.record_order(symbol, order.side, "market", qty, price, od.get("status") or "new",
-                       str(od.get("id")), strat, reason)
-    stop_px = risk.stop_price(side, price, settings.stop_pct)
-    exchange.set_stop(symbol, "sell" if side == "long" else "buy", qty, stop_px)
-    store.record_position_open(symbol, side, qty, price, stop_px, strat, reason)
-    return {"action": f"opened_{side}", "qty": qty, "entry": price, "stop": stop_px, "rationale": reason}
+    return live().reconcile(symbol, set_by)
 
 
 def halt(mode: str, reason: str) -> dict:
-    """flat = close everything + cancel stops; safe = freeze new entries (keep existing)."""
-    if mode == "flat":
-        realized = _capture_realized(settings.symbol)
-        exchange.close_position(settings.symbol)
-        exchange.cancel_all_orders(settings.symbol)
-        store.close_open_positions(settings.symbol, realized_pnl=realized)
-        store.set_strategy(settings.symbol, "flat", f"halt(flat): {reason}", "system")
-        store.set_mode("halted")
-    elif mode == "safe":
-        store.set_mode("safe")
-    return {"mode": store.get_mode()}
-
-
-# --- watcher tick: regime detect + drawdown breaker + dead-man watchdog -----
-
-def _detect_regime_and_notify(symbol: str) -> dict:
-    """Emit regime_shift via the proper regime classifier (ADX+vol), debounced by is_shift."""
-    try:
-        candles = _candles(symbol, limit=200)
-    except Exception as e:  # exchange/indicator failure → tell the leader
-        notify(events.engine_degraded_event(f"無法取得行情/指標：{e}"))
-        return {"degraded": str(e)}
-    rr = regime.classify(candles)
-    prev = store.get_last_regime()
-    if regime.is_shift(prev, rr.label):
-        store.set_last_regime(rr.label)
-        notify(events.regime_shift_event(prev, rr, status=_status_snapshot(symbol)))
-        return {"regime": rr.label, "shifted": True, "prev": prev}
-    if prev is None and rr.label != "unknown":
-        store.set_last_regime(rr.label)  # set the baseline without emitting
-    return {"regime": rr.label, "shifted": False}
-
-
-def _watchdog_check() -> dict:
-    """If the swarm stopped heartbeating, enter safe-mode (freeze new entries)."""
-    age = store.heartbeat_age()
-    if age is not None and age > settings.heartbeat_timeout_sec and store.get_mode() == "active":
-        store.set_mode("safe")
-        notify(events.safe_mode_event(
-            f"swarm heartbeat 逾時 {int(age)}s（>{settings.heartbeat_timeout_sec}s），凍結新倉",
-            status=_status_snapshot(settings.symbol)))
-        return {"safe_mode": True, "age": age}
-    return {"safe_mode": False, "age": age}
-
-
-def _record_pnl_snapshot() -> dict:
-    """One equity-curve point + the deterministic drawdown breaker (DEBT-5 / PRD §7.3)."""
-    try:
-        equity = _equity()
-        unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in exchange.fetch_positions())
-    except Exception as e:
-        return {"recorded": False, "error": str(e)}
-    realized = store.realized_total()
-    peak = store.equity_peak()
-    peak = max(peak, equity) if peak is not None else equity
-    dd = risk.check_drawdown(equity, peak, envelope())
-    store.record_pnl_snapshot(equity, realized, unrealized, dd.drawdown_pct)
-    if dd.breached and store.get_mode() == "active":  # circuit breaker: flatten + lock, then alert
-        halt("flat", f"drawdown {dd.drawdown_pct:.2f}% ≥ {settings.max_drawdown_pct}%")
-        store.record_risk_event("drawdown",
-                                {"equity": equity, "peak": peak, "drawdown_pct": dd.drawdown_pct},
-                                action_taken=dd.action or "flatten_and_lock")
-        notify(events.risk_breach_event(
-            f"drawdown {dd.drawdown_pct:.2f}% 觸發熔斷，已 flatten+lock",
-            status=_status_snapshot(settings.symbol)))
-    return {"recorded": True, "equity": equity, "drawdown_pct": dd.drawdown_pct, "breached": dd.breached}
+    return live().halt(mode, reason)
 
 
 def tick() -> dict:
-    """One periodic self-check (regime + watchdog + equity snapshot), run by the watcher loop."""
-    sym = settings.symbol
-    return {
-        "regime": _detect_regime_and_notify(sym),
-        "watchdog": _watchdog_check(),
-        "pnl_snapshot": _record_pnl_snapshot(),
-    }
+    return live().tick()
