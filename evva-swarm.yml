@@ -9,6 +9,18 @@ leader:
 
 workers:
   - agent: analyst
+  - agent: risk-monitor
+    schedule:
+      every: 30m
+      prompt: "稀疏風控 audit：查 /status·/positions 對照封套，有違規或逼近上限即 send_message 給 friday。沒事 stand down。"
+  - agent: reporter
+    schedule:
+      every: 1h
+      prompt: "產出狀態快照（查 /status、/pnl、/positions），send_message 給 friday。"
+  - agent: reviewer
+    schedule:
+      cron: "0 17 * * *"
+      prompt: "當日復盤：查 /strategy/outcomes、/pnl，總結當日操作 + 策略建議交 friday。"
 
 settings:
   # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.
