@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     max_position_usd: float = 2000.0
     max_total_exposure_usd: float = 4000.0
     max_leverage: int = 3
+    max_drawdown_pct: float = 5.0   # drawdown circuit breaker → flatten + lock (risk.check_drawdown)
     stop_pct: float = 0.02
 
     # event watcher / dead-man (T4)

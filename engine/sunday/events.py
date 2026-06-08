@@ -1,33 +1,96 @@
-"""Outbound events: Sunday -> swarm via the RP-9 webhook (`POST /api/swarm/{ref}/event`).
+"""Outbound webhook events: Sunday → swarm (RP-9 `POST /api/swarm/{ref}/event`).
 
-notify() is the one function the engine needs to wake the swarm. It POSTs to the
-evva webhook and logs every send to webhook_log. It NEVER raises if the swarm is
-unreachable — Sunday must keep running even when the swarm is down.
+PURE + stdlib (urllib, no httpx): builders assemble the payload, `post` fires it.
+Events are **self-sufficient** (PRD §7.9 / M3-T5): the payload carries a status
+snapshot + the rationale + a suggested_action, so a webhook-woken agent can size
+up the situation on its first turn without a round-trip.
+
+The live `notify()` (which also logs to webhook_log + stamps last_event_ts) lives
+in `engine.py`, where the store is in scope — keeping this module import-pure so
+the payload shape + transport are unit-testable with the stdlib alone. `post`
+NEVER raises: Sunday must keep trading even when the swarm is unreachable.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+import urllib.request
+from typing import Any
 
-import httpx
+# regime label → which strategy that regime favours (carried as suggested_action).
+_REGIME_HINT = {
+    "trending": "趨勢盤 → 建議切到 momentum（順勢）",
+    "ranging": "震盪盤 → 建議切到 mean_reversion（逆勢）",
+    "volatile": "高波動 → 建議 flat 觀望，避免被掃",
+    "unknown": "盤性未明 → 維持現狀、觀望",
+}
 
-from . import store
-from .config import settings
+
+def build_event(
+    event_type: str, title: str, body: str,
+    status: Any = None, rationale: str | None = None,
+    suggested_action: str | None = None, to: str = "leader",
+) -> dict:
+    """Assemble a self-sufficient webhook payload: {title, body, data, to}."""
+    return {
+        "title": title,
+        "body": body,
+        "data": {
+            "event_type": event_type,
+            "status": status,
+            "rationale": rationale,
+            "suggested_action": suggested_action,
+        },
+        "to": to,
+    }
 
 
-def notify(event_type: str, title: str, body: str, data: dict | None = None, to: str = "leader") -> dict:
-    payload = {"title": title, "body": body, "data": {**(data or {}), "event_type": event_type}, "to": to}
-    http_status: int | None = None
-    message_id: str | None = None
+def regime_shift_event(prev_label: str | None, regime, status: Any = None) -> dict:
+    """`regime_shift`: prev → new label, with the read's rationale + a matching hint.
+
+    `regime` is a regime.RegimeRead (has .label + .rationale)."""
+    title = f"regime shift：{prev_label} → {regime.label}"
+    hint = _REGIME_HINT.get(regime.label, _REGIME_HINT["unknown"])
+    return build_event("regime_shift", title, regime.rationale,
+                       status=status, rationale=regime.rationale, suggested_action=hint)
+
+
+def engine_degraded_event(detail: str, status: Any = None) -> dict:
+    """`engine_degraded`: the engine can't trade — tell the leader to look/restart."""
+    return build_event(
+        "engine_degraded", "engine degraded", detail, status=status,
+        rationale=detail, suggested_action="引擎異常 → 查 /status，必要時 POST /restart 重啟",
+    )
+
+
+def risk_breach_event(detail: str, status: Any = None) -> dict:
+    """`risk_breach`: a deterministic fuse fired (e.g. drawdown) — leader must review."""
+    return build_event(
+        "risk_breach", "risk breach", detail, status=status,
+        rationale=detail, suggested_action="風控熔斷已動作 → 複盤曝險，考慮縮封套或 halt",
+    )
+
+
+def safe_mode_event(detail: str, status: Any = None) -> dict:
+    """`safe_mode_entered`: heartbeat timed out → new entries frozen."""
+    return build_event(
+        "safe_mode_entered", "safe-mode entered", detail, status=status,
+        rationale=detail, suggested_action="腦死保護啟動 → 恢復 heartbeat 後再解除",
+    )
+
+
+def _build_request(url: str, payload: dict) -> urllib.request.Request:
+    """A JSON POST request (data set → method defaults to POST)."""
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
+    req.add_header("Content-Type", "application/json")
+    return req
+
+
+def post(url: str, payload: dict, timeout: float = 3.0) -> tuple[int | None, bool]:
+    """Fire-and-forget POST. Returns (http_status, ok); never raises."""
     try:
-        resp = httpx.post(settings.evva_webhook_url, json=payload, timeout=3.0)
-        http_status = resp.status_code
-        try:
-            message_id = resp.json().get("messageId")
-        except Exception:
-            pass
+        with urllib.request.urlopen(_build_request(url, payload), timeout=timeout) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            return status, 200 <= status < 300
     except Exception:
-        pass  # swarm webhook unreachable — log it and carry on
-    store.record_webhook(event_type, to, title, body, http_status, message_id)
-    store.set_last_event_ts(datetime.now(timezone.utc).isoformat())
-    return {"event_type": event_type, "http_status": http_status, "message_id": message_id}
+        return None, False  # swarm unreachable — caller logs it and carries on

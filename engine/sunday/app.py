@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from . import advisor, exchange, risk, store, strategy
+from . import advisor, engine, exchange, risk, store, strategy
 from .config import settings
 from .market import Candles
 
@@ -50,7 +50,7 @@ async def _watch_loop() -> None:
     while True:
         try:
             await asyncio.sleep(settings.tick_interval_sec)
-            await asyncio.to_thread(strategy.tick)
+            await asyncio.to_thread(engine.tick)
         except asyncio.CancelledError:
             break
         except Exception as e:  # never let the watcher die
@@ -269,7 +269,7 @@ def post_strategy(req: StrategyReq) -> dict:
     store.set_strategy(req.symbol, req.strategy, req.reason, set_by="leader")
     store.set_mode("active")
     try:
-        result = strategy.reconcile(req.symbol, set_by="leader")
+        result = engine.reconcile(req.symbol, set_by="leader")
     except risk.RiskRejected as e:
         raise HTTPException(409, f"risk rejected: {e}")
     except Exception as e:
@@ -289,7 +289,7 @@ def post_halt(req: HaltReq) -> dict:
         raise HTTPException(400, "mode must be 'flat' or 'safe'")
     _require_key()
     try:
-        result = strategy.halt(req.mode, req.reason)
+        result = engine.halt(req.mode, req.reason)
     except Exception as e:
         raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
     return {"ok": True, **result}
