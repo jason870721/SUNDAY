@@ -3,3 +3,4 @@
 # do NOT list them here.
 - http_request  # operate Sunday over its HTTP API; GET/HEAD auto-allow, lever POSTs ask
 - web_fetch     # pull external context when judging the market
+- skill
