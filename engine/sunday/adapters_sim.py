@@ -173,10 +173,12 @@ class MemLedger:
             self._realized += realized_pnl
         self.positions.append(("close", symbol, realized_pnl))
     def record_order(self, *a): self.orders.append(a)
-    def record_position_open(self, *a): self.positions.append(("open",) + a)
+    def record_position_open(self, *a, **kw): self.positions.append(("open",) + a)
     def record_risk_event(self, type_, detail, action_taken): self.risk_events.append((type_, action_taken))
-    def get_last_regime(self): return self._regime
-    def set_last_regime(self, regime): self._regime = regime
+    def get_last_regime(self, symbol): return self._regime
+    def set_last_regime(self, symbol, regime): self._regime = regime
+    def current_thesis(self, symbol): return None          # backtest doesn't drive directed
+    def close_thesis(self, *a, **kw): pass
     def heartbeat_age(self): return None          # no dead-man in a backtest
     def realized_total(self): return self._realized
     def equity_peak(self): return self._peak

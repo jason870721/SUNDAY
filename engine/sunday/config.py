@@ -1,6 +1,10 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _split(csv: str) -> list[str]:
+    return [s.strip().upper() for s in csv.split(",") if s.strip()]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -14,24 +18,40 @@ class Settings(BaseSettings):
     sunday_host: str = "127.0.0.1"
     sunday_port: int = 7777
 
-    # trading / strategy (milestone 1.0 — single symbol, hardcoded)
+    # trading basket (milestone-4: multi-symbol). `symbol` stays the primary/default
+    # for single-symbol endpoint params; `symbols` is the basket the watcher loops.
     symbol: str = "BTCUSDT"
+    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT"
     timeframe: str = "1h"
     ema_fast: int = 20
     ema_slow: int = 50
-    target_notional_usd: float = 500.0  # size to open per entry (within max_position_usd)
+    target_notional_usd: float = 500.0  # baseline (momentum/mean_reversion) entry size
     leverage: int = 3
 
-    # deterministic risk envelope (hard caps; NOT the LLM's job)
-    max_position_usd: float = 2000.0
-    max_total_exposure_usd: float = 4000.0
+    # deterministic risk envelope (hard caps; NOT the LLM's job) — milestone-4 test caps
+    max_position_usd: float = 1500.0
+    max_total_exposure_usd: float = 3000.0   # < 3×single → forces selectivity across the basket
     max_leverage: int = 3
-    max_drawdown_pct: float = 5.0   # drawdown circuit breaker → flatten + lock (risk.check_drawdown)
+    max_drawdown_pct: float = 5.0            # drawdown circuit breaker → flatten + lock
     stop_pct: float = 0.02
 
-    # event watcher / dead-man (T4)
-    tick_interval_sec: int = 60        # how often the watcher checks regime + watchdog
+    # milestone-4 directed mode: conviction (0..1) → size. Below the floor = stay flat.
+    conviction_floor: float = 0.2
+
+    # ablation: symbols forced to info-OFF (the desk gets no feeds for them). Empty = all ON.
+    info_off_symbols: str = ""
+
+    # event watcher / dead-man
+    tick_interval_sec: int = 60        # how often the watcher ingests feeds + checks regime/watchdog
     heartbeat_timeout_sec: int = 5400  # 90m without a swarm heartbeat -> safe-mode
+
+    @property
+    def symbol_list(self) -> list[str]:
+        return _split(self.symbols) or [self.symbol]
+
+    @property
+    def info_off_list(self) -> list[str]:
+        return _split(self.info_off_symbols)
 
 
 settings = Settings()

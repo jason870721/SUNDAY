@@ -1,0 +1,5 @@
+# No `model:` — runs against your configured default provider/model.
+effort: high
+when_to_use: "Flow 分析師 — funding/OI/清算/基差事件或 friday 指派時，判讀永續微結構的反身性，回報方向 + conviction。"
+inject_memory: false
+advertise_skills: true

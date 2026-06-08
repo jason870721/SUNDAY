@@ -1,0 +1,5 @@
+# Swarm tools (send_message, my_tasks, task_get) are injected by the worker role.
+- http_request  # read Sunday (/desk, /market, /positions) + POST /commentary
+- web_search    # market interpretation of funding / liquidations
+- web_fetch
+- skill

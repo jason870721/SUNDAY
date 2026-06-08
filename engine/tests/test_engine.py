@@ -59,12 +59,14 @@ class FakeBroker:
 
 class FakeLedger:
     def __init__(self, strategy="momentum", mode="active", peak=None, hb_age=None,
-                 last_regime=None, envelope=None):
+                 last_regime=None, envelope=None, thesis=None):
         self._strategy, self._mode, self._peak = strategy, mode, peak
         self._hb, self._regime, self._envelope = hb_age, last_regime, envelope
+        self._thesis = thesis
         self.signals = []; self.orders = []; self.positions = []
         self.risk_events = []; self.pnl = []; self.strategy_sets = []
         self.envelope_sets = []; self.rationale = None
+        self.closed_theses = []; self.last_thesis_id = None
     def current_strategy(self, symbol): return self._strategy
     def set_strategy(self, symbol, strategy, reason, set_by):
         self._strategy = strategy; self.strategy_sets.append((strategy, reason, set_by))
@@ -74,10 +76,14 @@ class FakeLedger:
     def set_mode(self, mode): self._mode = mode
     def close_open_positions(self, symbol, realized_pnl=None): self.positions.append(("close", symbol, realized_pnl))
     def record_order(self, *a): self.orders.append(a)
-    def record_position_open(self, *a): self.positions.append(("open",) + a)
+    def record_position_open(self, *a, **kw):
+        self.positions.append(("open",) + a); self.last_thesis_id = kw.get("thesis_id")
     def record_risk_event(self, type_, detail, action_taken): self.risk_events.append((type_, action_taken))
-    def get_last_regime(self): return self._regime
-    def set_last_regime(self, regime): self._regime = regime
+    def get_last_regime(self, symbol): return self._regime
+    def set_last_regime(self, symbol, regime): self._regime = regime
+    def current_thesis(self, symbol): return self._thesis
+    def close_thesis(self, thesis_id, status, outcome_pnl=None, outcome_note=None):
+        self.closed_theses.append((thesis_id, status))
     def heartbeat_age(self): return self._hb
     def realized_total(self): return 0.0
     def equity_peak(self): return self._peak
@@ -142,6 +148,57 @@ class TestReconcile(unittest.TestCase):
         with self.assertRaises(risk.RiskRejected):
             make(ledger=led).reconcile("BTCUSDT")              # make() uses default EngineConfig (2000 cap)
         self.assertEqual(led.risk_events[0][1], "order_rejected")
+
+
+def thesis(direction="long", conviction=0.5, invalidation_price=None, tid=1):
+    return {"id": tid, "direction": direction, "conviction": conviction,
+            "invalidation_price": invalidation_price, "rationale": "test thesis"}
+
+
+class TestDirected(unittest.TestCase):
+    def test_directed_opens_sized_by_conviction(self):
+        b = FakeBroker()
+        led = FakeLedger(strategy="directed", thesis=thesis("long", 0.5))
+        out = make(broker=b, ledger=led).reconcile("BTCUSDT")
+        self.assertEqual(out["action"], "opened_long")
+        self.assertEqual(out["conviction"], 0.5)
+        self.assertEqual(led.last_thesis_id, 1)              # position tagged with the thesis
+        # conviction 0.5 × max_position 2000 = 1000 notional / price 119 ≈ 8.403
+        self.assertAlmostEqual(out["qty"], round(0.5 * 2000 / 119.0, 3))
+
+    def test_directed_below_floor_stays_flat(self):
+        b = FakeLedger(strategy="directed", thesis=thesis("long", 0.1))   # < 0.2 floor
+        brk = FakeBroker()
+        out = make(broker=brk, ledger=b).reconcile("BTCUSDT")
+        self.assertEqual(out["action"], "noop")               # already flat, no target → nothing to do
+        self.assertIsNone(brk.current_side("BTCUSDT"))        # the real invariant: no position opened
+
+    def test_directed_no_thesis_is_flat(self):
+        brk = FakeBroker()
+        out = make(broker=brk, ledger=FakeLedger(strategy="directed", thesis=None)).reconcile("BTCUSDT")
+        self.assertEqual(out["action"], "noop")
+        self.assertIsNone(brk.current_side("BTCUSDT"))
+
+    def test_directed_uses_thesis_invalidation_as_stop(self):
+        b = FakeBroker()
+        led = FakeLedger(strategy="directed", thesis=thesis("long", 0.5, invalidation_price=90.0))
+        make(broker=b, ledger=led).reconcile("BTCUSDT")
+        self.assertEqual(b.stops[-1], ("BTCUSDT", 90.0))     # thesis invalidation overrides stop_pct
+
+    def test_directed_over_exposure_rejected_by_fuse(self):
+        # conviction 1.0 → 2000 notional, but the envelope caps total exposure at 5 → rejected
+        cfg = EngineConfig(envelope=risk.Envelope(max_total_exposure_usd=5.0))
+        led = FakeLedger(strategy="directed", thesis=thesis("long", 1.0))
+        with self.assertRaises(risk.RiskRejected):
+            make(ledger=led, cfg=cfg).reconcile("BTCUSDT")
+        self.assertEqual(led.risk_events[0][1], "order_rejected")
+
+    def test_directed_flat_thesis_closes_book(self):
+        b = FakeBroker(); b.pos["BTCUSDT"] = ("long", 1.0, 100.0)
+        led = FakeLedger(strategy="directed", thesis=thesis("flat", 0.9))
+        out = make(broker=b, ledger=led).reconcile("BTCUSDT")
+        self.assertEqual(out["action"], "flat")
+        self.assertIn("BTCUSDT", b.closed)
 
 
 class TestHalt(unittest.TestCase):

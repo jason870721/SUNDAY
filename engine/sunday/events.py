@@ -56,10 +56,12 @@ def regime_shift_event(prev_label: str | None, regime, status: Any = None) -> di
 
 
 def engine_degraded_event(detail: str, status: Any = None) -> dict:
-    """`engine_degraded`: the engine can't trade — tell the leader to look/restart."""
+    """`engine_degraded`: the engine can't trade — tell the leader to look (no HTTP restart)."""
     return build_event(
         "engine_degraded", "engine degraded", detail, status=status,
-        rationale=detail, suggested_action="引擎異常 → 查 /status，必要時 POST /restart 重啟",
+        rationale=detail,
+        suggested_action="引擎異常 → 查 /status 對帳；Sunday 無 HTTP 重啟端點，請通報 User 重啟服務，"
+                         "其間可 POST /halt {mode:'safe'} 凍新倉保護現有部位",
     )
 
 
@@ -77,6 +79,26 @@ def safe_mode_event(detail: str, status: Any = None) -> dict:
         "safe_mode_entered", "safe-mode entered", detail, status=status,
         rationale=detail, suggested_action="腦死保護啟動 → 恢復 heartbeat 後再解除",
     )
+
+
+_DESK_HINT = {
+    "funding_extreme": "資金費極端 → 查 /desk?symbol=，評估收 carry 還是站旁邊（小心反身性逆轉）",
+    "oi_surge": "持倉劇變 → 查 /desk?symbol=，評估方向與擁擠度",
+    "basis_stretch": "基差拉伸 → 查 /desk?symbol=，評估反身性風險",
+    "vol_spike": "波動跳升 → 查 /desk?symbol=，慎開倉",
+    "notable": "此標的此刻值得注意 → 查 /desk?symbol=，評估是否值得一個 thesis",
+}
+
+
+def notable_event(symbol: str, event_type: str, driver: str, score: float,
+                  metrics: dict | None = None, status: Any = None) -> dict:
+    """`funding_extreme`/`oi_surge`/`basis_stretch`/`vol_spike`: Sunday's notable-score
+    wake — a symbol is doing something worth a research round (milestone-4 T2)."""
+    m = metrics or {}
+    body = (f"{symbol} notable={score:.2f}（driver: {driver}）｜"
+            f"funding {m.get('funding_annual_pct')}%/yr, basis {m.get('basis_bps')}bps")
+    return build_event(event_type, f"notable: {symbol} · {driver}", body, status=status,
+                       rationale=body, suggested_action=_DESK_HINT.get(event_type, _DESK_HINT["notable"]))
 
 
 def _build_request(url: str, payload: dict) -> urllib.request.Request:

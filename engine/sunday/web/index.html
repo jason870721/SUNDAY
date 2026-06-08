@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Sunday · Quant Terminal</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <!-- Vendored (offline-capable, version-locked). Classic scripts run before deferred ES modules,
+       so window.Vue / window.LightweightCharts are ready when /ui/js/app.js executes. -->
+  <script src="/ui/vendor/vue.global.prod.js"></script>
+  <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/ui/vendor/marked.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div class="boot">
+      <div class="boot-mark">☀</div>
+      <div class="boot-spinner"></div>
+      <div class="boot-text">Sunday terminal loading…</div>
+    </div>
+  </div>
+  <script type="module" src="/ui/js/app.js"></script>
+</body>
+</html>
