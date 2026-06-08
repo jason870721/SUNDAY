@@ -13,14 +13,14 @@ workdir: .
 leader:
   agent: friday
   schedule:
-    every: 30m
+    every: 10m
     prompt: "安全網巡檢（非輪詢）：POST /heartbeat 維持 dead-man liveness，順手 GET /status·/desk 看 Sunday 活著嗎、封套內嗎、籃子有無 notable 標的值得開一輪研究。有事才協調（派 analyst→綜合→踢館→拍板→回信）；無事就一句回報並 stand down。"
 
 workers:
   - agent: analyst-flow          # event-driven only：由 funding_extreme / oi_surge / basis_stretch / liq_cluster webhook 喚醒（不排程，避免輪詢）
   - agent: analyst-news
     schedule:
-      every: 6h
+      every: 1h
       prompt: "低頻安全網巡檢（非輪詢；重大事件由 catalyst webhook 即時喚醒你）：GET /desk 掃籃子有無迫近事件（解鎖/macro/上架/治理），有就用 web 讀新聞判讀、send_message 給 friday（方向+conviction+事件風險+來源）。沒事就一句 stand down。"
   - agent: risk-monitor
     schedule:
@@ -33,5 +33,5 @@ workers:
 
 settings:
   # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.
-  permission_mode: default
-  max_iterations: 50
+  permission_mode: bypass
+  max_iterations: 99
