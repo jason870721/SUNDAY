@@ -12,11 +12,11 @@ import asyncio
 import logging
 import pathlib
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, TypeVar
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from . import exchange, risk, store, strategy
@@ -24,6 +24,7 @@ from .config import settings
 
 log = logging.getLogger("sunday")
 _MANUAL = pathlib.Path(__file__).resolve().parent / "manual.md"
+_DASHBOARD = pathlib.Path(__file__).resolve().parent / "dashboard.html"
 
 T = TypeVar("T")
 _watcher_task: asyncio.Task | None = None
@@ -73,6 +74,17 @@ def _ex(fn: Callable[[], T]) -> T:
         raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
 
 
+def _parse_since(since: str | None) -> datetime | None:
+    """Parse an ISO date/datetime; naive values are treated as UTC. None -> no bound."""
+    if not since:
+        return None
+    try:
+        dt = datetime.fromisoformat(since)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 class StrategyReq(BaseModel):
     symbol: str = "BTCUSDT"
     strategy: str
@@ -84,9 +96,21 @@ class HaltReq(BaseModel):
     mode: str = "flat"  # flat | safe
 
 
+class CommentaryReq(BaseModel):
+    author: str = "analyst"
+    title: str | None = None
+    body: str
+
+
 @app.get("/manual", response_class=PlainTextResponse)
 def manual() -> str:
     return _MANUAL.read_text()
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard() -> str:
+    """Sunday-served execution dashboard (single self-contained page). D12: not in evva."""
+    return _DASHBOARD.read_text()
 
 
 @app.get("/status")
@@ -158,30 +182,72 @@ def market(symbol: str = "BTCUSDT", tf: str = "1h", limit: int = 200) -> dict:
 def positions() -> list[dict]:
     _require_key()
     raw = _ex(lambda: exchange.fetch_positions())
-    return [
-        {
-            "symbol": p.get("symbol"),
-            "side": p.get("side"),
-            "qty": p.get("contracts"),
-            "entry": p.get("entryPrice"),
-            "mark": p.get("markPrice"),
-            "upnl": p.get("unrealizedPnl"),
-            "stop": None,
-            "strategy": None,
-            "entry_reason": None,
-        }
-        for p in raw
-    ]
+    metas = store.open_positions_meta_map()  # DB row gives strategy/entry_reason/stop
+    out = []
+    for p in raw:
+        meta: dict = {}
+        for db_sym, m in metas.items():
+            if exchange._sym(db_sym) == p.get("symbol"):
+                meta = m
+                break
+        out.append(
+            {
+                "symbol": p.get("symbol"),
+                "side": p.get("side"),
+                "qty": p.get("contracts"),
+                "entry": p.get("entryPrice"),
+                "mark": p.get("markPrice"),
+                "upnl": p.get("unrealizedPnl"),
+                "stop": meta.get("stop_price"),
+                "strategy": meta.get("strategy"),
+                "entry_reason": meta.get("entry_reason"),
+            }
+        )
+    return out
 
 
 @app.get("/pnl")
 def pnl(since: str | None = None) -> dict:
-    _require_key()
-    bal = _ex(lambda: exchange.fetch_balance())
-    raw = _ex(lambda: exchange.fetch_positions())
-    unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in raw)
-    equity = (bal.get("total") or {}).get("USDT")
-    return {"realized": None, "unrealized": unrealized, "equity": equity, "equity_curve": []}
+    """Realized (DB) + live unrealized/equity (best-effort) + equity_curve (DB).
+
+    Read-only dashboard endpoint: curve + realized come from postgres and render
+    even if the exchange is unreachable; equity/unrealized are live extras.
+    """
+    since_dt = _parse_since(since)
+    if since_dt is None:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=30)
+        window_days = 30
+    else:
+        window_days = max(1, round((datetime.now(timezone.utc) - since_dt).total_seconds() / 86400))
+    curve = store.equity_curve(since_dt)
+    realized = store.realized_total(since_dt)
+    equity = unrealized = None
+    try:
+        bal = exchange.fetch_balance()
+        equity = (bal.get("total") or {}).get("USDT")
+        unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in exchange.fetch_positions())
+    except Exception:
+        if curve:
+            equity = curve[-1][1]
+    return {
+        "realized": round(realized, 4),
+        "unrealized": unrealized,
+        "equity": equity,
+        "equity_curve": curve,
+        "window_days": window_days,
+    }
+
+
+@app.get("/performance")
+def get_performance(since: str | None = None) -> list[dict]:
+    """Per-strategy attribution: realized_pnl / n_trades / win_rate / avg_pnl / open_qty."""
+    return store.performance(_parse_since(since))
+
+
+@app.get("/strategy_history")
+def get_strategy_history(since: str | None = None) -> list[dict]:
+    """Strategy-switch timeline (for the dashboard's reason overlay)."""
+    return store.strategy_history(_parse_since(since))
 
 
 @app.post("/strategy")
@@ -222,3 +288,15 @@ def post_halt(req: HaltReq) -> dict:
 def heartbeat() -> dict:
     store.set_heartbeat()
     return {"ok": True, "watchdog_reset_at": datetime.now(timezone.utc).isoformat()}
+
+
+@app.post("/commentary")
+def post_commentary(req: CommentaryReq) -> dict:
+    """analyst pushes a User-facing market note. Harmless write, NOT a trading lever."""
+    cid = store.record_commentary(req.author, req.title, req.body)
+    return {"ok": True, "id": cid}
+
+
+@app.get("/commentary")
+def get_commentary(since: str | None = None, limit: int = 50) -> list[dict]:
+    return store.list_commentary(_parse_since(since), min(limit, 500))

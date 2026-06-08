@@ -168,11 +168,19 @@ def record_position_open(
         )
 
 
-def close_open_positions(symbol: str) -> None:
+def close_open_positions(symbol: str, realized_pnl: float | None = None) -> None:
+    """Mark open rows closed; persist realized_pnl (for per-strategy attribution).
+
+    realized_pnl is captured by the caller from the position's unrealizedPnl the
+    instant before closing — the accurate proxy ccxt gives us on testnet without
+    fill-by-fill reconciliation. 1.0/1.1 hold ≤1 open row per symbol, so the
+    single captured value maps cleanly onto the row.
+    """
     with pool.connection() as conn:
         conn.execute(
-            "UPDATE positions SET closed_at=now() WHERE symbol=%s AND closed_at IS NULL",
-            (symbol,),
+            "UPDATE positions SET closed_at=now(), realized_pnl=COALESCE(%s, realized_pnl)"
+            " WHERE symbol=%s AND closed_at IS NULL",
+            (realized_pnl, symbol),
         )
 
 
@@ -194,3 +202,152 @@ def record_webhook(
             " VALUES (%s,%s,%s,%s,%s,%s)",
             (event_type, to_member, title, body, http_status, message_id),
         )
+
+
+# --- dashboard data (milestone 2.0) ----------------------------------------
+
+def record_pnl_snapshot(equity: float, realized: float, unrealized: float, drawdown_pct: float | None) -> None:
+    """One point on the equity curve. Written by the watcher tick (skip on exchange error)."""
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO pnl_snapshots (equity, realized, unrealized, drawdown_pct) VALUES (%s,%s,%s,%s)",
+            (equity, realized, unrealized, drawdown_pct),
+        )
+
+
+def equity_peak() -> float | None:
+    """High-water equity over all snapshots (for drawdown_pct)."""
+    with pool.connection() as conn:
+        row = conn.execute("SELECT MAX(equity) FROM pnl_snapshots").fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
+def realized_total(since=None) -> float:
+    """Cumulative realized PnL from closed positions (optionally since a datetime)."""
+    with pool.connection() as conn:
+        if since is not None:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(realized_pnl),0) FROM positions"
+                " WHERE closed_at IS NOT NULL AND closed_at >= %s",
+                (since,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(realized_pnl),0) FROM positions WHERE closed_at IS NOT NULL"
+            ).fetchone()
+    return float(row[0] or 0)
+
+
+def open_positions_meta_map() -> dict[str, dict]:
+    """symbol -> latest open position's {strategy, entry_reason, stop_price} (for /positions join)."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ON (symbol) symbol, strategy, entry_reason, stop_price"
+            " FROM positions WHERE closed_at IS NULL ORDER BY symbol, opened_at DESC"
+        ).fetchall()
+    return {
+        r[0]: {
+            "strategy": r[1],
+            "entry_reason": r[2],
+            "stop_price": float(r[3]) if r[3] is not None else None,
+        }
+        for r in rows
+    }
+
+
+# --- commentary (analyst's User-facing market notes; harmless write) -------
+
+def record_commentary(author: str, title: str | None, body: str) -> int:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "INSERT INTO commentary (author, title, body) VALUES (%s,%s,%s) RETURNING id",
+            (author, title, body),
+        ).fetchone()
+    return int(row[0])
+
+
+def list_commentary(since=None, limit: int = 50) -> list[dict]:
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT ts, author, title, body FROM commentary WHERE ts >= %s ORDER BY ts DESC LIMIT %s",
+                (since, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT ts, author, title, body FROM commentary ORDER BY ts DESC LIMIT %s",
+                (limit,),
+            ).fetchall()
+    return [{"ts": r[0].isoformat(), "author": r[1], "title": r[2], "body": r[3]} for r in rows]
+
+
+# --- dashboard read aggregations (milestone 2.0 / T2) ----------------------
+
+def equity_curve(since=None) -> list[list]:
+    """[[ts_ms, equity], ...] from pnl_snapshots, oldest first."""
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM ts)*1000, equity FROM pnl_snapshots"
+                " WHERE ts >= %s ORDER BY ts",
+                (since,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM ts)*1000, equity FROM pnl_snapshots ORDER BY ts"
+            ).fetchall()
+    return [[int(r[0]), float(r[1])] for r in rows]
+
+
+def performance(since=None) -> list[dict]:
+    """Per-strategy attribution from closed positions (+ open_qty from open ones)."""
+    clause = "AND closed_at >= %s" if since is not None else ""
+    params = (since,) if since is not None else ()
+    with pool.connection() as conn:
+        closed = conn.execute(
+            "SELECT strategy, COALESCE(SUM(realized_pnl),0), COUNT(*),"
+            " COUNT(*) FILTER (WHERE realized_pnl > 0), AVG(realized_pnl)"
+            f" FROM positions WHERE closed_at IS NOT NULL {clause} GROUP BY strategy",
+            params,
+        ).fetchall()
+        open_rows = conn.execute(
+            "SELECT strategy, COALESCE(SUM(qty),0) FROM positions"
+            " WHERE closed_at IS NULL GROUP BY strategy"
+        ).fetchall()
+    open_qty = {r[0]: float(r[1]) for r in open_rows}
+    out, seen = [], set()
+    for strat, realized, n, wins, avg in closed:
+        seen.add(strat)
+        out.append({
+            "strategy": strat,
+            "realized_pnl": round(float(realized), 4),
+            "n_trades": int(n),
+            "win_rate": round(wins / n, 4) if n else 0.0,
+            "avg_pnl": round(float(avg), 4) if avg is not None else 0.0,
+            "open_qty": open_qty.get(strat, 0.0),
+        })
+    for strat, qty in open_qty.items():  # strategies with only open (no closed) trades
+        if strat not in seen:
+            out.append({"strategy": strat, "realized_pnl": 0.0, "n_trades": 0,
+                        "win_rate": 0.0, "avg_pnl": 0.0, "open_qty": qty})
+    return out
+
+
+def strategy_history(since=None) -> list[dict]:
+    """strategy_state timeline (for the equity-curve switch overlay), oldest first."""
+    with pool.connection() as conn:
+        if since is not None:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM set_at)*1000, symbol, strategy, reason, set_by"
+                " FROM strategy_state WHERE set_at >= %s ORDER BY set_at",
+                (since,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM set_at)*1000, symbol, strategy, reason, set_by"
+                " FROM strategy_state ORDER BY set_at"
+            ).fetchall()
+    return [
+        {"set_at_ms": int(r[0]), "symbol": r[1], "strategy": r[2], "reason": r[3], "set_by": r[4]}
+        for r in rows
+    ]
