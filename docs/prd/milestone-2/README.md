@@ -1,5 +1,10 @@
 # Milestone 2 — Gate-2（真錢 + dashboard + 四個 extras）
 
+> 🆕 **2026-06-08 — Gate-1 已驗收，本 Gate-2 已 re-center。** 權威產品計畫改看：
+> **[`product-plan.md`](product-plan.md)（產品計畫）** + **[`feasibility-analysis.md`](feasibility-analysis.md)（可行性分析）**。
+> 主題：把 Sunday 升級成 **agent 專用的量化投資平台**（可解耦回測、swarm 整合回測、以營利為目標）。
+> 下表的 **2.1/2.2/2.3 被新計畫的 G2.1–G2.5 取代**（2.0 dashboard 維持已完成）；保留下表作為歷史脈絡。
+
 > 上層 PRD：[`../sunday-project-prd.md`](../sunday-project-prd.md)（§10 Gate-2、決策 **D11/D14**、§7.7 schema、§7.11 User-facing 系統 of record）。本資料夾把 **Gate-2** 拆成可逐步交付的 sub-PRD，與 [milestone-1](../milestone-1/) 同構：**一個 sub-PRD 一個資料夾、一個 session 一個 T**。
 > **Milestone 2 = Gate-2**：在 Gate-1 證明 swarm 機制正確後，追求「**賺不賺 + User 可觀測 + 情報/研究/真錢硬化**」。**Gate-2 真正成敗 = 真實長期 P&L**（§2.1：生產等級 ≠ 賺錢；alpha 是研究問題、工程換不到）。
 
