@@ -18,6 +18,8 @@ Sunday 是我們的交易引擎（Binance USDⓈ-M 永續 **testnet**），在 `
 ## 唯讀（GET，自動放行）
 
 ```jsonc
+// ★ 決策支援面板：每個策略此刻的投票 + 指標 + regime + funding + 建議——切策略**先看這個**，別自己算
+{ "method": "GET", "url": "http://127.0.0.1:7777/advisor", "query": { "symbol": "BTCUSDT" } }
 { "method": "GET", "url": "http://127.0.0.1:7777/status" }       // 當值策略 + 理由 + 倉位 + 曝險 + mode
 { "method": "GET", "url": "http://127.0.0.1:7777/positions" }    // 持倉（strategy / entry_reason / stop）
 { "method": "GET", "url": "http://127.0.0.1:7777/pnl", "query": { "since": "2026-06-01" } }  // 損益 + 權益曲線
@@ -36,7 +38,8 @@ Sunday 是我們的交易引擎（Binance USDⓈ-M 永續 **testnet**），在 `
   "body": { "symbol": "BTCUSDT", "strategy": "momentum", "reason": "<為什麼切：regime 讀數 + 依據>" } }
 ```
 
-- 策略值：`momentum`（順勢）/ `flat`（空手，立即平倉）。
+- 策略值：`momentum`（順勢）/ `mean_reversion`（逆勢震盪）/ `flat`（空手，立即平倉）。
+- **不確定切哪個？先 `GET /advisor`** —— 它給每個策略的投票 + regime + funding + 建議策略，照它決定。
 - **`reason` 必填**；漏了回 `400`。切完從回應 / 再 GET `/status` 驗證真的換了。
 
 ## Lever：叫停（緊急）

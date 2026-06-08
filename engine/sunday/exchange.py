@@ -52,6 +52,17 @@ def fetch_ticker(symbol: str) -> dict:
     return exchange().fetch_ticker(_sym(symbol))
 
 
+def fetch_funding_rate(symbol: str) -> float | None:
+    """Current perp funding rate as a per-8h fraction (positive = longs pay shorts).
+    A perps-specific edge the advisor factors in. None on unsupported/error."""
+    try:
+        fr = exchange().fetch_funding_rate(_sym(symbol))
+        rate = fr.get("fundingRate")
+        return float(rate) if rate is not None else None
+    except Exception:
+        return None
+
+
 def fetch_positions() -> list[dict]:
     return [p for p in exchange().fetch_positions() if p.get("contracts")]
 

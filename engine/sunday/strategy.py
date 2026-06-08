@@ -8,10 +8,10 @@ lands in 1.1.
 
 from __future__ import annotations
 
-from . import events, exchange, risk, store
+from . import events, exchange, indicators, risk, store
 from .config import settings
 
-STRATEGIES = {"momentum", "flat"}  # mean_reversion -> 1.1
+STRATEGIES = {"momentum", "mean_reversion", "flat"}
 
 
 def ema(values: list[float], period: int) -> float:
@@ -37,7 +37,20 @@ def compute_target(symbol: str, strategy: str) -> dict:
             f"（{settings.timeframe}）→ {side}"
         )
         return {"side": side, "rationale": rationale, "indicators": {"ema_fast": ef, "ema_slow": es, "close": closes[-1]}}
-    raise ValueError(f"strategy '{strategy}' not available in milestone 1.0")
+    if strategy == "mean_reversion":
+        closes = [c[4] for c in exchange.fetch_ohlcv(symbol, settings.timeframe, 60)]
+        bb = indicators.bollinger(closes, 20, 2.0)
+        rsi = indicators.rsi(closes, 14)
+        z = bb["z"] if bb else 0.0
+        if bb and rsi is not None and z <= -1.0 and rsi <= 35:
+            side, why = "long", f"超賣 z={z:.2f}、RSI {rsi:.0f}"
+        elif bb and rsi is not None and z >= 1.0 and rsi >= 65:
+            side, why = "short", f"超買 z={z:.2f}、RSI {rsi:.0f}"
+        else:
+            side, why = "flat", f"未觸帶邊（z={z:.2f}）"
+        return {"side": side, "rationale": f"mean_reversion：{why} → {side}",
+                "indicators": {"bb_z": z, "rsi14": rsi, "close": closes[-1] if closes else None}}
+    raise ValueError(f"strategy '{strategy}' not available")
 
 
 def _current_side(symbol: str) -> str:
