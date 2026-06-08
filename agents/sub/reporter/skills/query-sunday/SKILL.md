@@ -2,16 +2,14 @@
 
 Sunday 在 `http://127.0.0.1:7777`。用 **`http_request`** 工具唯讀查詢（GET 自動放行，免審批）。你**不拉任何 lever**。
 
-> **多標的**：引擎跑一籃子（`SUNDAY_SYMBOLS`）。`GET /status` 的 `symbols[]` 每標的一筆；`/signals?symbol=` 逐標的查。
-
 ## 常用唯讀端點
 
 ```jsonc
-{ "method": "GET", "url": "http://127.0.0.1:7777/status" }                                  // 當值策略/倉位/曝險/回撤/equity/mode
-{ "method": "GET", "url": "http://127.0.0.1:7777/signals", "query": { "symbol": "BTCUSDT" } }   // 決策面板(指標已算好,別自己算)
-{ "method": "GET", "url": "http://127.0.0.1:7777/positions" }                               // 持倉 + 進場理由
-{ "method": "GET", "url": "http://127.0.0.1:7777/pnl", "query": { "since": "2026-06-01" } } // 已/未實現損益 + 權益曲線
-{ "method": "GET", "url": "http://127.0.0.1:7777/strategy/outcomes", "query": { "symbol": "BTCUSDT" } }  // 每次切換的結果
+{ "method": "GET", "url": "http://127.0.0.1:7777/status" }       // 當值策略 + 理由 + 倉位 + 曝險 + mode
+{ "method": "GET", "url": "http://127.0.0.1:7777/positions" }    // 持倉（strategy / entry_reason / stop）
+{ "method": "GET", "url": "http://127.0.0.1:7777/pnl", "query": { "since": "2026-06-01" } }  // 已/未實現損益 + 權益曲線
+{ "method": "GET", "url": "http://127.0.0.1:7777/performance" }  // per-strategy 績效歸因（哪個策略在賺/賠）
+{ "method": "GET", "url": "http://127.0.0.1:7777/strategy_history" }  // 策略切換時間軸（含 reason）
 ```
 
 ## 回報

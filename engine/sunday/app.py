@@ -1,69 +1,52 @@
-"""Sunday HTTP service — the full engine (milestone-1.0 + 1.1 + 1.2 basket).
+"""Sunday HTTP service.
 
-This is the thin wiring layer: FastAPI routes + a background trading loop. Every
-*decision* is delegated to a unit-tested pure module —
-
-  indicators / strategy / regime  → what the tape says
-  risk                            → the deterministic fuse (never the LLM)
-  execution.plan_transition       → open / flip / close / hold
-  views                           → the /signals panel + defensive /strategy,/envelope
-  attribution                     → per-switch outcome lens (closed loop)
-  events                          → self-sufficient webhooks
-
-— so the part that can't be unit-tested without postgres/exchange (this file) stays
-as mechanical as possible. The loop runs in a daemon thread (store + exchange +
-urllib are all sync) and is wrapped so one bad tick degrades only that tick.
-
-Multi-symbol (M1.2): strategy, regime, and position are **per-symbol** (strategy is
-DB-keyed by symbol); mode / drawdown-lock / equity-peak / halt / heartbeat are
-**account-level** (one box of risk across the whole basket). The total-exposure cap
-therefore sums across symbols when sizing a new entry.
+T1: startup (db pool + redis + migrations), /manual, /health.
+T2: /market (public), /positions, /pnl (private).
+T3: /strategy + /halt levers, real /status.
+T4: /heartbeat + background watcher (regime detect -> notify; dead-man watchdog).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
 import threading
+import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Callable, TypeVar
 
-from fastapi import FastAPI, Response
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from . import attribution, events, execution, regime, risk, store, strategy, views
+from . import exchange, risk, store, strategy
 from .config import settings
-from .exchange import BinanceUSDM, ExchangeError
 
 log = logging.getLogger("sunday")
 _MANUAL = pathlib.Path(__file__).resolve().parent / "manual.md"
+_DASHBOARD = pathlib.Path(__file__).resolve().parent / "dashboard.html"
 
+T = TypeVar("T")
+_watcher_task: asyncio.Task | None = None
 
-def _parse_symbols(raw: str) -> list[str]:
-    syms = [s.strip().upper() for s in raw.split(",") if s.strip()]
-    return syms or ["BTCUSDT"]
-
-
-SYMBOLS = _parse_symbols(settings.sunday_symbols)   # the basket (M1.2)
-SYMBOL = SYMBOLS[0]                                  # default for symbol-scoped endpoints
+SYMBOL = "BTCUSDT"            # Gate-1 single symbol (PRD §10 / milestone-1.0)
 TIMEFRAME = "1h"
 TICK_SECONDS = 60            # loop cadence; the strategy itself reads 1h bars
 WATCHDOG_MINUTES = 90       # no swarm heartbeat for this long → safe-mode (PRD §7.6)
-# The active risk envelope lives on EngineState.envelope (runtime-settable via /envelope).
+ENVELOPE = risk.DEFAULT_ENVELOPE
 
 
 @dataclass
 class EngineState:
-    mode: str = "flat"                       # flat | running | safe | halt (account-level)
-    locked: bool = False                     # drawdown breaker latched (account-level)
+    mode: str = "flat"                       # flat | running | safe | halt
+    locked: bool = False                     # drawdown breaker latched
+    symbol: str = SYMBOL
     peak_equity: float = 0.0
+    last_regime_label: str | None = None
     last_event_ts: str | None = None
-    last_regime: dict = field(default_factory=dict)   # symbol → last emitted regime label
-    last_candles: dict = field(default_factory=dict)  # symbol → last fetched Candles
-    envelope: risk.Envelope = risk.DEFAULT_ENVELOPE   # runtime-settable via /envelope
-    last_rollup_date: str | None = None               # YYYY-MM-DD of last daily_rollup_ready
+    last_candles: Candles | None = None
     stop: threading.Event = field(default_factory=threading.Event)
 
 
@@ -85,25 +68,6 @@ class HaltBody(BaseModel):
     mode: str = "safe"          # safe (freeze new) | flat (close all)
 
 
-class EnvelopeBody(BaseModel):
-    reason: str | None = None
-    max_position_usd: float | None = None
-    max_total_exposure_usd: float | None = None
-    max_leverage: float | None = None
-    max_drawdown_pct: float | None = None
-    stop_pct: float | None = None
-
-
-class CommentaryBody(BaseModel):
-    body: str
-    author: str = "analyst"
-
-
-class RestartBody(BaseModel):
-    confirm: bool = False
-    reason: str = ""
-
-
 # --- helpers ---------------------------------------------------------------
 
 def _now() -> datetime:
@@ -117,24 +81,10 @@ def _heartbeat_ok() -> bool:
     return (_now() - last).total_seconds() < WATCHDOG_MINUTES * 60
 
 
-def _safe_equity() -> float:
+def _current_side() -> tuple[str | None, dict | None]:
+    """Book side from the exchange (truth), or None when flat/unreachable."""
     try:
-        return ex.wallet_equity_usdt()
-    except ExchangeError:
-        return 0.0
-
-
-def _all_positions() -> list[dict]:
-    try:
-        return ex.positions(None)
-    except ExchangeError:
-        return []
-
-
-def _current_side(symbol: str) -> tuple[str | None, dict | None]:
-    """Book side for one symbol from the exchange (truth), or None when flat/unreachable."""
-    try:
-        pos = ex.positions(symbol)
+        pos = ex.positions(state.symbol)
     except ExchangeError:
         return None, None
     if not pos:
@@ -142,53 +92,39 @@ def _current_side(symbol: str) -> tuple[str | None, dict | None]:
     return pos[0]["side"], pos[0]
 
 
-def _total_exposure_usd(exclude_symbol: str | None = None, positions: list[dict] | None = None) -> float:
-    """Sum of |notional| across all open positions (account-level exposure). When
-    sizing an entry on `exclude_symbol`, that symbol's own current exposure is left
-    out so the new order's notional is added on top of the *rest* of the basket."""
-    rows = positions if positions is not None else _all_positions()
-    return sum(abs(float(p["qty"]) * float(p["mark"])) for p in rows if p["symbol"] != exclude_symbol)
-
-
-def _symbol_status(symbol: str) -> dict:
-    strat_name = store.current_strategy(symbol)
-    candles = state.last_candles.get(symbol)
+def _gather_status() -> dict:
+    strat_name = store.current_strategy(state.symbol)
+    candles = state.last_candles
     rationale = None
-    out_votes = None
     if candles is not None:
         try:
             rationale = strategy.evaluate(strat_name, candles).rationale
         except ValueError:
             pass
-        out_votes = views.votes_summary(candles)
-    _, pos = _current_side(symbol)
-    out = {"symbol": symbol, "strategy": strat_name, "strategy_rationale": rationale, "position": pos}
-    if out_votes is not None:
-        out["votes"] = out_votes
-    return out
-
-
-def _gather_status() -> dict:
-    """Account-level snapshot + a per-symbol summary list (the /status shape and the
-    self-sufficient body of every webhook)."""
-    equity = _safe_equity()
-    positions = _all_positions()
-    exposure = _total_exposure_usd(positions=positions)
-    return {
+    side, pos = _current_side()
+    exposure = abs(float(pos["qty"]) * float(pos["mark"])) if pos else 0.0
+    equity = 0.0
+    try:
+        equity = ex.wallet_equity_usdt()
+    except ExchangeError:
+        pass
+    base = {
         "alive": True,
         "mode": state.mode,
-        "as_of_ts": _now().isoformat(),
-        "equity": equity,
+        "symbol": state.symbol,
+        "strategy": strat_name,
+        "strategy_rationale": rationale,
+        "position": pos,
         "exposure_usd": exposure,
         "leverage": (exposure / equity) if equity else 0.0,
-        "pnl_day": sum(float(p["upnl"]) for p in positions),
+        "equity": equity,
+        "pnl_day": float(pos["upnl"]) if pos else 0.0,
         "drawdown_pct": risk.drawdown_pct(equity, state.peak_equity),
         "last_event_ts": state.last_event_ts,
         "swarm_heartbeat_ok": _heartbeat_ok(),
-        "last_lever": store.last_lever(),       # latest switch across the basket
-        "envelope": state.envelope.as_dict(),
-        "symbols": [_symbol_status(s) for s in SYMBOLS],
+        "last_lever": store.last_lever(state.symbol),
     }
+    return views.status_view(base, candles)
 
 
 def _fire(event: dict) -> None:
@@ -204,70 +140,53 @@ def _fire(event: dict) -> None:
 
 # --- the trading loop ------------------------------------------------------
 
-def _maybe_daily_rollup(now: datetime) -> None:
-    """Fire daily_rollup_ready once per day after the review hour — the reviewer's
-    event-driven alternative to its 17:00 timer."""
-    today = now.date().isoformat()
-    if now.hour >= 17 and state.last_rollup_date != today:
-        state.last_rollup_date = today
-        _fire(events.build_event("daily_rollup_ready", title="Daily rollup ready",
-                                 body="當日資料齊備，可復盤。", status=_gather_status(), to="reviewer"))
-
-
 def tick() -> None:
-    """One engine cycle. Account-level guards run once; each symbol is then read +
-    reconciled. Wrapped by run_loop so a raised error degrades one tick."""
-    now = _now()
+    """One engine cycle. Wrapped by run_loop so a raised error degrades one tick."""
+    symbol = state.symbol
+    candles = ex.fetch_klines(symbol, TIMEFRAME, 200)
+    state.last_candles = candles
 
-    # 1) liveness: no swarm heartbeat → safe-mode floor (account-level, PRD §7.6)
+    # 1) regime read → fire regime_shift only on a real change (PRD §5 event-gating)
+    rr = regime.classify(candles)
+    if regime.is_shift(state.last_regime_label, rr.label):
+        _fire(events.regime_shift_event(state.last_regime_label, rr, _gather_status()))
+    if rr.label != "unknown":
+        state.last_regime_label = rr.label
+
+    # 2) liveness: no swarm heartbeat → safe-mode floor (PRD §7.6 dead-man)
     if not _heartbeat_ok() and state.mode not in ("safe", "halt"):
         state.mode = "safe"
         _fire(events.build_event("safe_mode_entered", title="Safe-mode entered",
                                  body="swarm heartbeat 逾時，Sunday 凍結新倉（既有倉留 stop）。",
                                  status=_gather_status(), to="leader"))
 
-    # 2) drawdown breaker (deterministic, non-LLM, account-level)
+    # 3) drawdown breaker (deterministic, non-LLM)
     try:
         equity = ex.wallet_equity_usdt()
         state.peak_equity = max(state.peak_equity, equity)
-        dd = risk.check_drawdown(equity, state.peak_equity, state.envelope)
+        dd = risk.check_drawdown(equity, state.peak_equity, ENVELOPE)
         if dd.breached and not state.locked:
             state.locked = True
-            _flatten_all(reason="drawdown breaker")
+            _flatten(reason="drawdown breaker")
             store.record_risk_event("drawdown", {"drawdown_pct": dd.drawdown_pct}, "flatten_and_lock")
             _fire(events.build_event("risk_breach", title="Risk breach: drawdown",
                                      body=dd.reason, status=_gather_status(), to="leader"))
     except ExchangeError:
         pass
 
-    _maybe_daily_rollup(now)
-
-    if state.mode == "flat" and not state.locked:   # promote past the cold-start gate
-        state.mode = "running"
-    trading = state.mode == "running" and not state.locked
-
-    # 3) per-symbol: regime read (event-gated webhook) + reconcile
-    for symbol in SYMBOLS:
-        try:
-            candles = ex.fetch_klines(symbol, TIMEFRAME, 200)
-            state.last_candles[symbol] = candles
-            rr = regime.classify(candles)
-            prev = state.last_regime.get(symbol)
-            if regime.is_shift(prev, rr.label):
-                _fire(events.regime_shift_event(symbol, prev, rr, _gather_status()))
-            if rr.label != "unknown":
-                state.last_regime[symbol] = rr.label
-            if trading:
-                _reconcile(symbol, candles)
-        except ExchangeError as e:
-            _fire(events.engine_degraded_event(f"{symbol}: {e}"))
+    # 4) act on the active strategy (unless frozen/locked)
+    if state.mode in ("safe", "halt") or state.locked:
+        return
+    state.mode = "running"
+    _reconcile(candles)
 
 
-def _reconcile(symbol: str, candles) -> None:
-    """Bring one symbol's book in line with its active strategy's target, risk-gated."""
+def _reconcile(candles: Candles) -> None:
+    """Bring the book in line with the active strategy's target, risk-gated."""
+    symbol = state.symbol
     strat_name = store.current_strategy(symbol)
     target = strategy.target_side(strat_name, candles)
-    side, _ = _current_side(symbol)
+    side, _ = _current_side()
     action = execution.plan_transition(side, target)
     if action == execution.HOLD:
         return
@@ -277,7 +196,7 @@ def _reconcile(symbol: str, candles) -> None:
     price = candles.last_close or 0.0
 
     if action == execution.CLOSE or action.startswith("flip"):
-        _flatten(symbol, reason=f"{action} ({strat_name})")
+        _flatten(reason=f"{action} ({strat_name})")
         if action == execution.CLOSE:
             return
 
@@ -286,29 +205,28 @@ def _reconcile(symbol: str, candles) -> None:
 
 
 def _open(symbol: str, side: str, price: float, strat_name: str, reason: str) -> None:
-    """Size within the envelope (exposure summed across the basket), gate, then place
-    a market entry + an exchange-native stop."""
-    ctx = risk.RiskContext(equity=_safe_equity(), current_exposure_usd=_total_exposure_usd(exclude_symbol=symbol))
-    qty = round(risk.max_allowed_qty(price, ctx, state.envelope), 3)
+    """Size within the envelope, gate, then place market entry + native stop."""
+    ctx = risk.RiskContext(equity=_safe_equity(), current_exposure_usd=0.0)
+    qty = round(risk.max_allowed_qty(price, ctx, ENVELOPE), 3)
     if qty <= 0:
         return
     order_side = "BUY" if side == "long" else "SELL"
     stop_side = "SELL" if side == "long" else "BUY"
-    stop_price = round(price * (1 - state.envelope.stop_pct / 100) if side == "long"
-                       else price * (1 + state.envelope.stop_pct / 100), 2)
+    stop_price = round(price * (1 - ENVELOPE.stop_pct / 100) if side == "long"
+                       else price * (1 + ENVELOPE.stop_pct / 100), 2)
 
     proposal = risk.OrderProposal(symbol, order_side, qty, price, has_stop=True, is_entry=True)
-    decision = risk.check_order(proposal, ctx, state.envelope)
+    decision = risk.check_order(proposal, ctx, ENVELOPE)
     if not decision.allowed:                       # the fuse (PRD §7.3 / V6)
-        store.record_risk_event(decision.type or "rejected", {"symbol": symbol, "qty": qty, "price": price}, "reject_order")
-        log.warning("risk rejected entry on %s: %s", symbol, decision.reason)
+        store.record_risk_event(decision.type or "rejected", {"qty": qty, "price": price}, "reject_order")
+        log.warning("risk rejected entry: %s", decision.reason)
         return
     try:
         resp = ex.market_order(symbol, order_side, qty)
         ex.stop_market(symbol, stop_side, stop_price, qty)
     except ExchangeError as e:
         store.record_order(symbol, order_side, "MARKET", qty, price, "rejected", strat_name, reason)
-        log.warning("entry failed on %s: %s", symbol, e)
+        log.warning("entry failed: %s", e)
         return
     oid = store.record_order(symbol, order_side, "MARKET", qty, price, "filled", strat_name, reason,
                              str(resp.get("orderId")) if isinstance(resp, dict) else None)
@@ -316,28 +234,30 @@ def _open(symbol: str, side: str, price: float, strat_name: str, reason: str) ->
     store.open_position(symbol, side, qty, price, stop_price, strat_name, reason)
 
 
-def _flatten(symbol: str, reason: str) -> None:
-    """Close one symbol's open position (reduce-only) and cancel its resting orders."""
-    side, pos = _current_side(symbol)
+def _flatten(reason: str) -> None:
+    """Close the open position (reduce-only) and cancel resting orders."""
+    side, pos = _current_side()
     try:
-        ex.cancel_all(symbol)
+        ex.cancel_all(state.symbol)
         if pos:
             close_side = "SELL" if side == "long" else "BUY"
-            ex.market_order(symbol, close_side, float(pos["qty"]), reduce_only=True)
+            ex.market_order(state.symbol, close_side, float(pos["qty"]), reduce_only=True)
     except ExchangeError as e:
-        log.warning("flatten %s failed: %s", symbol, e)
+        log.warning("flatten failed: %s", e)
         return
-    for p in store.open_positions(symbol):
+    for p in store.open_positions(state.symbol):
         store.close_position(p["id"], float(pos["upnl"]) if pos else 0.0)
 
 
-def _flatten_all(reason: str) -> None:
-    for symbol in SYMBOLS:
-        _flatten(symbol, reason)
+def _safe_equity() -> float:
+    try:
+        return ex.wallet_equity_usdt()
+    except ExchangeError:
+        return 0.0
 
 
 def run_loop() -> None:
-    log.info("sunday loop start (symbols=%s tick=%ss)", ",".join(SYMBOLS), TICK_SECONDS)
+    log.info("sunday loop start (symbol=%s tick=%ss)", state.symbol, TICK_SECONDS)
     while not state.stop.wait(0):
         try:
             tick()
@@ -357,24 +277,124 @@ async def lifespan(app: FastAPI):
     store.connect()
     applied = store.run_migrations()
     log.info("migrations applied: %s", applied or "(up to date)")
-    env = store.get_envelope()      # restore the leader's envelope across restarts
-    if env:
-        state.envelope = risk.Envelope(**env)
-    state.stop.clear()
-    thread = threading.Thread(target=run_loop, name="sunday-loop", daemon=True)
-    thread.start()
+    store.set_heartbeat()  # baseline so the watchdog doesn't fire at boot
+    global _watcher_task
+    _watcher_task = asyncio.create_task(_watch_loop())
     yield
-    state.stop.set()
-    thread.join(timeout=5)
+    if _watcher_task is not None:
+        _watcher_task.cancel()
     store.close()
 
 
-app = FastAPI(title="Sunday", version="0.3.0", lifespan=lifespan)
+async def _watch_loop() -> None:
+    """Periodic cheap self-check: regime detection (-> webhook) + dead-man watchdog."""
+    while True:
+        try:
+            await asyncio.sleep(settings.tick_interval_sec)
+            await asyncio.to_thread(strategy.tick)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:  # never let the watcher die
+            log.warning("watcher tick error: %s", e)
+
+
+app = FastAPI(title="Sunday", version="0.1.0", lifespan=lifespan)
+
+
+def _require_key() -> None:
+    if not settings.binance_testnet_key:
+        raise HTTPException(503, "BINANCE_TESTNET_KEY not set — add it to engine/.env")
+
+
+def _ex(fn: Callable[[], T]) -> T:
+    """Run an exchange call; turn ccxt/network errors into a clean 502."""
+    try:
+        return fn()
+    except HTTPException:
+        raise
+    except Exception as e:  # external API — surface a clean error, not a 500 traceback
+        raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
+
+
+def _parse_since(since: str | None) -> datetime | None:
+    """Parse an ISO date/datetime; naive values are treated as UTC. None -> no bound."""
+    if not since:
+        return None
+    try:
+        dt = datetime.fromisoformat(since)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+class StrategyReq(BaseModel):
+    symbol: str = "BTCUSDT"
+    strategy: str
+    reason: str
+
+
+class HaltReq(BaseModel):
+    reason: str
+    mode: str = "flat"  # flat | safe
+
+
+class CommentaryReq(BaseModel):
+    author: str = "analyst"
+    title: str | None = None
+    body: str
 
 
 @app.get("/manual", response_class=PlainTextResponse)
 def manual() -> str:
     return _MANUAL.read_text()
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard() -> str:
+    """Sunday-served execution dashboard (single self-contained page). D12: not in evva."""
+    return _DASHBOARD.read_text()
+
+
+@app.get("/status")
+def status() -> dict:
+    mode = store.get_mode()
+    strat = store.current_strategy(settings.symbol)
+    rationale = store.get_rationale() or "(尚無決策)"
+    age = store.heartbeat_age()
+    swarm_ok = age is None or age < settings.heartbeat_timeout_sec
+    position = None
+    exposure = equity = 0.0
+    leverage = 0
+    try:
+        for p in exchange.fetch_positions():
+            if p["symbol"] == exchange._sym(settings.symbol) and p.get("contracts"):
+                position = {
+                    "side": p["side"],
+                    "qty": p["contracts"],
+                    "entry": p.get("entryPrice"),
+                    "mark": p.get("markPrice"),
+                    "upnl": p.get("unrealizedPnl"),
+                }
+                exposure = abs(float(p["contracts"]) * float(p.get("markPrice") or 0))
+                leverage = int(float(p.get("leverage") or settings.leverage))
+        bal = exchange.fetch_balance()
+        equity = float((bal.get("total") or {}).get("USDT") or 0.0)
+    except Exception as e:
+        rationale = f"{rationale} [status: exchange unreachable: {type(e).__name__}]"
+    return {
+        "alive": True,
+        "mode": mode,
+        "symbol": settings.symbol,
+        "strategy": strat,
+        "strategy_rationale": rationale,
+        "position": position,
+        "exposure_usd": exposure,
+        "leverage": leverage,
+        "equity": equity,
+        "pnl_day": None,
+        "last_event_ts": store.get_last_event_ts(),
+        "swarm_heartbeat_ok": swarm_ok,
+    }
 
 
 @app.get("/health")
@@ -393,127 +413,131 @@ def health() -> dict:
     return {"db": db_ok, "redis": redis_ok}
 
 
-@app.get("/status")
-def status() -> dict:
-    return _gather_status()
-
-
-@app.get("/signals")
-def signals(symbol: str = SYMBOL) -> dict:
-    candles = ex.fetch_klines(symbol, TIMEFRAME, 200)
-    return views.signals_view(symbol, candles, store.current_strategy(symbol))
-
-
 @app.get("/market")
-def market(symbol: str = SYMBOL, tf: str = TIMEFRAME, limit: int = 100) -> dict:
-    candles = ex.fetch_klines(symbol, tf, limit)
-    return {"symbol": symbol, "tf": tf, "ohlcv": candles.to_rows()}
+def market(symbol: str = "BTCUSDT", tf: str = "1h", limit: int = 200) -> dict:
+    ohlcv = _ex(lambda: exchange.fetch_ohlcv(symbol, tf, limit))
+    return {"symbol": symbol, "tf": tf, "ohlcv": ohlcv}
 
 
 @app.get("/positions")
 def positions() -> list[dict]:
-    rows = _all_positions()
-    # enrich with the engine's entry_reason/strategy/stop from the ledger
-    open_rows = {p["symbol"]: p for p in store.open_positions(None)}
-    for r in rows:
-        led = open_rows.get(r["symbol"])
-        if led:
-            r["strategy"] = led["strategy"]
-            r["entry_reason"] = led["entry_reason"]
-            r["stop"] = float(led["stop_price"]) if led["stop_price"] is not None else None
-    return rows
+    _require_key()
+    raw = _ex(lambda: exchange.fetch_positions())
+    metas = store.open_positions_meta_map()  # DB row gives strategy/entry_reason/stop
+    out = []
+    for p in raw:
+        meta: dict = {}
+        for db_sym, m in metas.items():
+            if exchange._sym(db_sym) == p.get("symbol"):
+                meta = m
+                break
+        out.append(
+            {
+                "symbol": p.get("symbol"),
+                "side": p.get("side"),
+                "qty": p.get("contracts"),
+                "entry": p.get("entryPrice"),
+                "mark": p.get("markPrice"),
+                "upnl": p.get("unrealizedPnl"),
+                "stop": meta.get("stop_price"),
+                "strategy": meta.get("strategy"),
+                "entry_reason": meta.get("entry_reason"),
+            }
+        )
+    return out
 
 
 @app.get("/pnl")
 def pnl(since: str | None = None) -> dict:
-    since_dt = datetime.fromisoformat(since) if since else None
-    unrealized = sum(float(p["upnl"]) for p in _all_positions())
+    """Realized (DB) + live unrealized/equity (best-effort) + equity_curve (DB).
+
+    Read-only dashboard endpoint: curve + realized come from postgres and render
+    even if the exchange is unreachable; equity/unrealized are live extras.
+    """
+    since_dt = _parse_since(since)
+    if since_dt is None:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=30)
+        window_days = 30
+    else:
+        window_days = max(1, round((datetime.now(timezone.utc) - since_dt).total_seconds() / 86400))
+    curve = store.equity_curve(since_dt)
+    realized = store.realized_total(since_dt)
+    equity = unrealized = None
+    try:
+        bal = exchange.fetch_balance()
+        equity = (bal.get("total") or {}).get("USDT")
+        unrealized = sum(float(p.get("unrealizedPnl") or 0) for p in exchange.fetch_positions())
+    except Exception:
+        if curve:
+            equity = curve[-1][1]
     return {
-        "realized": None,  # realized series lives in pnl_snapshots; equity_curve carries it
+        "realized": round(realized, 4),
         "unrealized": unrealized,
-        "equity": _safe_equity(),
-        "equity_curve": store.equity_curve(since_dt),
+        "equity": equity,
+        "equity_curve": curve,
+        "window_days": window_days,
     }
 
 
+@app.get("/performance")
+def get_performance(since: str | None = None) -> list[dict]:
+    """Per-strategy attribution: realized_pnl / n_trades / win_rate / avg_pnl / open_qty."""
+    return store.performance(_parse_since(since))
+
+
+@app.get("/strategy_history")
+def get_strategy_history(since: str | None = None) -> list[dict]:
+    """Strategy-switch timeline (for the dashboard's reason overlay)."""
+    return store.strategy_history(_parse_since(since))
+
+
 @app.post("/strategy")
-def post_strategy(body: StrategyBody) -> Response:
-    current = store.current_strategy(body.symbol)
-    resp, code = views.apply_strategy(current, body.strategy, body.reason, body.expected_current, body.symbol)
-    if code == 200 and resp.get("applied"):
-        store.set_strategy(body.symbol, body.strategy, body.reason or "", "friday")
-        # the next tick repositions to the new strategy; flat closes immediately
-        if body.strategy == "flat":
-            _flatten(body.symbol, reason="strategy→flat")
-    return JSONResponse(resp, status_code=code)
+def post_strategy(req: StrategyReq) -> dict:
+    if req.strategy not in strategy.STRATEGIES:
+        raise HTTPException(400, f"strategy must be one of {sorted(strategy.STRATEGIES)} (mean_reversion lands in 1.1)")
+    _require_key()
+    store.set_strategy(req.symbol, req.strategy, req.reason, set_by="leader")
+    store.set_mode("active")
+    try:
+        result = strategy.reconcile(req.symbol, set_by="leader")
+    except risk.RiskRejected as e:
+        raise HTTPException(409, f"risk rejected: {e}")
+    except Exception as e:
+        raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
+    return {
+        "ok": True,
+        "symbol": req.symbol,
+        "strategy": req.strategy,
+        "applied_at": datetime.now(timezone.utc).isoformat(),
+        "result": result,
+    }
 
 
 @app.post("/halt")
-def post_halt(body: HaltBody) -> dict:
-    state.mode = "halt" if body.mode == "flat" else "safe"
-    if body.mode == "flat":
-        _flatten_all(reason=f"halt: {body.reason}")
-    store.record_risk_event("halt", {"mode": body.mode, "reason": body.reason}, f"mode={state.mode}")
-    return {"ok": True, "resulting_status": {"mode": state.mode}}
+def post_halt(req: HaltReq) -> dict:
+    if req.mode not in ("flat", "safe"):
+        raise HTTPException(400, "mode must be 'flat' or 'safe'")
+    _require_key()
+    try:
+        result = strategy.halt(req.mode, req.reason)
+    except Exception as e:
+        raise HTTPException(502, f"exchange error: {type(e).__name__}: {str(e)[:300]}")
+    return {"ok": True, **result}
 
 
 @app.post("/heartbeat")
-def post_heartbeat() -> dict:
-    ts = store.set_heartbeat()
-    if state.mode == "safe" and not state.locked:    # heartbeat back → leave safe floor
-        state.mode = "running"
-    return {"ok": True, "watchdog_reset_at": ts}
-
-
-@app.get("/strategy/outcomes")
-def strategy_outcomes(symbol: str = SYMBOL, since: str | None = None) -> dict:
-    since_dt = datetime.fromisoformat(since) if since else None
-    switches = store.strategy_switches(symbol, since_dt)
-    positions_ = store.positions_for_attribution(symbol, since_dt)
-    episodes = attribution.attribute(switches, positions_)
-    return {"symbol": symbol, "episodes": [e.as_dict() for e in episodes]}
-
-
-@app.post("/envelope")
-def post_envelope(body: EnvelopeBody) -> Response:
-    updates = {k: v for k, v in body.model_dump().items()
-               if k in risk.Envelope.FIELDS and v is not None}
-    resp, code = views.apply_envelope(state.envelope.as_dict(), updates, body.reason)
-    if code == 200 and resp.get("applied"):
-        new_env = resp["resulting_status"]["envelope"]
-        state.envelope = risk.Envelope(**new_env)
-        store.set_envelope(new_env, body.reason or "", "friday")
-    return JSONResponse(resp, status_code=code)
+def heartbeat() -> dict:
+    store.set_heartbeat()
+    return {"ok": True, "watchdog_reset_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.post("/commentary")
-def post_commentary(body: CommentaryBody) -> dict:
-    # analyst's one harmless, User-facing write (PRD §7.11) — not a trading lever.
-    store.record_commentary(body.author, body.body)
-    return {"ok": True}
+def post_commentary(req: CommentaryReq) -> dict:
+    """analyst pushes a User-facing market note. Harmless write, NOT a trading lever."""
+    cid = store.record_commentary(req.author, req.title, req.body)
+    return {"ok": True, "id": cid}
 
 
 @app.get("/commentary")
-def get_commentary(since: str | None = None) -> dict:
-    since_dt = datetime.fromisoformat(since) if since else None
-    return {"commentary": store.list_commentary(since_dt)}
-
-
-@app.post("/restart")
-def post_restart(body: RestartBody) -> Response:
-    if not body.confirm:
-        return JSONResponse({"ok": False, "error": "confirm_required",
-                             "message": "restart is non-idempotent — pass confirm=true"}, status_code=400)
-    # Reset supervision state + force a re-sync next tick (peak re-seeds from live equity).
-    state.locked = False
-    state.mode = "running"
-    state.last_regime = {}
-    state.peak_equity = _safe_equity()
-    store.record_risk_event("restart", {"reason": body.reason}, "engine state reset + re-sync")
-    return JSONResponse({"ok": True, "resulting_status": {"mode": state.mode, "locked": state.locked}})
-
-
-@app.get("/trades")
-def get_trades(since: str | None = None) -> dict:
-    since_dt = datetime.fromisoformat(since) if since else None
-    return {"trades": store.list_trades(since_dt)}
+def get_commentary(since: str | None = None, limit: int = 50) -> list[dict]:
+    return store.list_commentary(_parse_since(since), min(limit, 500))

@@ -20,7 +20,7 @@ workers:
   - agent: reviewer
     schedule:
       cron: "0 17 * * *"
-      prompt: "當日復盤：查 /strategy/outcomes、/pnl，總結當日操作 + 策略建議交 friday。"
+      prompt: "當日復盤：查 /performance、/strategy_history、/pnl，總結當日操作 + 策略建議交 friday。"
 
 settings:
   # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.
