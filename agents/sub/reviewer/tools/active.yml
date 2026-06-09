@@ -2,4 +2,4 @@
 # task_get) are injected automatically by the worker role — do NOT list them here.
 - http_request  # read /api/account/* (trades/orders/pnl) + POST the daily report to /api/journal
 - skill
-- read          # read {workdir}/MEMORY.md for context
+- read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory/reviewer)

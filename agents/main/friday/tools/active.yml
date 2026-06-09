@@ -5,7 +5,7 @@
 - web_search
 - web_fetch     # pull external context when judging the market
 - skill
-- read          # recall {workdir}/MEMORY.md + read docs/PRD tickets
+- read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory/friday)
 - edit
-- write         # maintain {workdir}/MEMORY.md, file docs/PRD/PRD-*.md
+- write         # file docs/PRD/PRD-*.md (long-term memory now via http_request → /api/memory/friday)
 - bash

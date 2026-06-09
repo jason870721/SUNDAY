@@ -8,7 +8,7 @@ Sunday 是 Binance USDⓈ-M 交易所代理，在 `http://127.0.0.1:7777`。用 
 2. **找機會**：`GET /api/markets?sort=volume&order=desc` 掃量大的標的；對有興趣的看 `GET /api/markets/{symbol}`（限額/最大槓桿）、`GET /api/klines/indicators?...&set=rsi,macd,adx`、`GET /api/funding`、`GET /api/indices`（情緒/總經）。
 3. **要研究**：拿不準就 `task_assign` 派 analyst-flow（技術/資金費）、analyst-news（事件/敘事），等回報再決定。不急就設 alert 觀望。
 4. **下單**：方向 + 大小 + 槓桿 + 保證金模式 + **停利 + 停損（必帶）** + memo → `POST /api/perp/order`。
-5. **驗證 + 記錄**：看回應的成交與 TP/SL legs；把理由 / 共識 / 教訓寫進 `{workdir}/MEMORY.md`。
+5. **驗證 + 記錄**：看回應的成交與 TP/SL legs；把理由 / 共識 / 教訓寫進記憶倉庫——醒來先 `GET /api/memory/friday`，收工前整份 `PUT /api/memory/friday`。
 
 ## 看行情（GET，唯讀）
 

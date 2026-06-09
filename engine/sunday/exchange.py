@@ -333,3 +333,26 @@ def close_position(symbol: str) -> dict | None:
             close_side = "sell" if amt > 0 else "buy"
             return create_order(symbol, "market", close_side, abs(amt), params={"reduceOnly": True})
     return None
+
+
+def cancel_all_open_orders() -> list[str]:
+    """Cancel every resting order across all symbols (test reset). Returns the symbols cleared."""
+    symbols = sorted({o["symbol"] for o in fetch_open_orders() if o.get("symbol")})
+    for sym in symbols:
+        cancel_all_orders(sym)
+    return symbols
+
+
+def close_all_positions() -> list[str]:
+    """Flatten every open position with reduce-only market orders (test reset).
+    Returns the symbols closed. Cancel resting orders BEFORE calling this so the
+    TP/SL legs don't reject as the position goes flat."""
+    closed: list[str] = []
+    for p in fetch_positions():
+        amt = _f(p.get("positionAmt"))
+        sym = p.get("symbol")
+        if sym and amt:
+            close_side = "sell" if amt > 0 else "buy"
+            create_order(sym, "market", close_side, abs(amt), params={"reduceOnly": True})
+            closed.append(sym)
+    return closed

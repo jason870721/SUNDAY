@@ -1,0 +1,5 @@
+model: deepseek-v4-pro
+effort: ultra
+when_to_use: "前瞻研究員 / 新方向探索 — 一天 3 次（平均分佈）任意探索美股新聞、區塊鏈大小事、鏈上新協議、美國政府動態，整理出可能成為新交易機會的 idea / 敘事 / 主題回報 friday；在 Sunday 記憶倉庫（/api/memory/researcher）跨次累積研究結果。不下單。"
+inject_memory: false
+advertise_skills: true

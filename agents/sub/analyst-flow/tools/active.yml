@@ -3,6 +3,6 @@
 - web_search    # market interpretation of funding / liquidations / momentum
 - web_fetch
 - skill
-- read          # read {workdir}/MEMORY.md for friday's watchlist / context
+- read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory)
 - edit
 - write

@@ -2,6 +2,6 @@
 # task_get) are injected automatically by the worker role — do NOT list them here.
 - http_request  # read Sunday's account state over HTTP (/api/account/*; read-only, no trading)
 - skill
-- read          # read {workdir}/MEMORY.md for the agreed risk consensus
+- read          # read docs/PRD tickets (risk consensus / memory now via http_request → /api/memory)
 - edit
 - write

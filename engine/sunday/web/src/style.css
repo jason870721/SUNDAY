@@ -124,6 +124,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .btn.buy { background: rgba(63,185,80,.16); border-color: var(--up); color: var(--up); }
 .btn.sell { background: rgba(248,81,73,.16); border-color: var(--down); color: var(--down); }
 .btn.ghost { background: transparent; }
+.btn.danger { background: rgba(248,81,73,.14); border-color: var(--down); color: var(--down); }
+.btn.danger:hover { background: rgba(248,81,73,.22); border-color: var(--down); }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .seg button { background: transparent; border: 0; color: var(--muted); padding: 7px 12px; cursor: pointer; font-family: var(--mono); font-size: 12px; }
@@ -145,6 +147,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .tag { font-family: var(--mono); font-size: 11px; padding: 2px 7px; border-radius: 5px; background: var(--panel-3); color: var(--muted); }
 .tag.long, .tag.buy { background: rgba(63,185,80,.15); color: var(--up); }
 .tag.short, .tag.sell { background: rgba(248,81,73,.15); color: var(--down); }
+.tag.profit { background: rgba(63,185,80,.15); color: var(--up); }
+.tag.loss { background: rgba(248,81,73,.15); color: var(--down); }
+.tag.system { background: rgba(245,166,35,.15); color: var(--accent); }
+.tag.info { background: rgba(88,166,255,.13); color: var(--blue); }
+
+/* ---- modal (confirm dialogs) ---- */
+.modal-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(4,6,10,.66); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); width: 470px; max-width: 100%; box-shadow: 0 20px 70px rgba(0,0,0,.6); }
+.modal-head { padding: 15px 18px; border-bottom: 1px solid var(--border-soft); font-size: 15px; }
+.modal-body { padding: 16px 18px; color: var(--muted); line-height: 1.6; }
+.modal-body ul { margin: 8px 0; padding-left: 20px; }
+.modal-body li { margin: 3px 0; }
+.modal-body b { color: var(--text); }
+.modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--border-soft); }
+.check { display: flex; align-items: center; gap: 9px; margin-top: 14px; color: var(--text); cursor: pointer; font-size: 13px; }
+.check input { width: auto; margin: 0; padding: 0; accent-color: var(--down); }
 
 .toast { position: fixed; right: 22px; bottom: 22px; z-index: 50; display: flex; flex-direction: column; gap: 10px; }
 .toast .msg { background: var(--panel-3); border: 1px solid var(--border); border-left: 3px solid var(--accent); padding: 11px 15px; border-radius: 8px; max-width: 380px; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }

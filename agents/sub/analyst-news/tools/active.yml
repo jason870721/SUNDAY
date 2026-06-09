@@ -3,6 +3,6 @@
 - web_fetch
 - http_request  # cross-check Sunday: /api/indices, /api/funding
 - skill
-- read          # read {workdir}/MEMORY.md for friday's watchlist / context
+- read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory)
 - edit
 - write

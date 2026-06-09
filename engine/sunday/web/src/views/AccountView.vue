@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { api, type Position, type Order, type Trade, type Page } from '../api/client'
 import { price, pct, usd, num, sign, time } from '../lib/format'
-import { attempt } from '../lib/toast'
+import { attempt, toast } from '../lib/toast'
 import Pager from '../components/Pager.vue'
 
 type Tab = 'positions' | 'open' | 'orders' | 'trades'
@@ -14,6 +14,9 @@ const open = ref<Page<Order> | null>(null)
 const orders = ref<Page<Order> | null>(null)
 const trades = ref<Page<Trade> | null>(null)
 const histSymbol = ref('BTCUSDT')
+const showReset = ref(false)   // reset confirm modal
+const resetAck = ref(false)    // "I understand" — arms the danger button (the double-check)
+const resetting = ref(false)
 let timer: number | undefined
 
 async function loadAll(): Promise<void> {
@@ -32,6 +35,21 @@ function go(t: Tab): void {
 }
 async function closePos(sym: string): Promise<void> { if (await attempt(() => api.closePosition(sym), `closed ${sym}`)) loadAll() }
 async function cancel(o: Order): Promise<void> { await attempt(() => api.cancelOrder(o.id, o.symbol), 'order cancelled'); loadOpen(open.value?.page) }
+
+function openReset(): void { resetAck.value = false; showReset.value = true }
+function closeReset(): void { if (!resetting.value) showReset.value = false }
+async function doReset(): Promise<void> {
+  resetting.value = true
+  const r = await attempt(() => api.resetAll())
+  resetting.value = false
+  if (!r) return
+  const n = r.closed_positions.length, m = r.cancelled_orders.length
+  toast(`reset · closed ${n} position${n === 1 ? '' : 's'}, cancelled ${m} order${m === 1 ? '' : 's'}, DB wiped`, 'ok')
+  showReset.value = false
+  open.value = orders.value = trades.value = null   // drop stale pages; re-fetch active tab
+  loadAll()
+  if (tab.value === 'open') loadOpen()
+}
 
 onMounted(() => { loadAll(); timer = setInterval(() => { loadAll(); if (tab.value === 'open') loadOpen(open.value?.page) }, 8000) })
 onUnmounted(() => clearInterval(timer))
@@ -59,6 +77,8 @@ onUnmounted(() => clearInterval(timer))
           @keyup.enter="tab === 'orders' ? loadOrders() : loadTrades()" />
         <button class="btn sm" @click="tab === 'orders' ? loadOrders() : loadTrades()">load</button>
       </template>
+      <button class="btn sm danger" @click="openReset"
+        title="Testing: close all positions, cancel all orders, wipe the database">⟳ Reset</button>
     </div>
 
     <div style="overflow: auto">
@@ -129,5 +149,31 @@ onUnmounted(() => clearInterval(timer))
     <Pager v-if="tab === 'open' && open" :page="open.page" :page-size="open.page_size" :total="open.total" :has-more="open.has_more" @go="loadOpen" />
     <Pager v-else-if="tab === 'orders' && orders" :page="orders.page" :page-size="orders.page_size" :total="orders.total" :has-more="orders.has_more" @go="loadOrders" />
     <Pager v-else-if="tab === 'trades' && trades" :page="trades.page" :page-size="trades.page_size" :total="trades.total" :has-more="trades.has_more" @go="loadTrades" />
+  </div>
+
+  <!-- Reset confirm — double-check: open the modal, tick "I understand" to arm, then confirm. -->
+  <div v-if="showReset" class="modal-backdrop" @click.self="closeReset">
+    <div class="modal">
+      <div class="modal-head"><b>⚠ Reset everything</b></div>
+      <div class="modal-body">
+        <p>For quick testing — this acts on the <b>testnet</b> account and Sunday's local store:</p>
+        <ul>
+          <li>Close <b>all</b> open positions at market</li>
+          <li>Cancel <b>all</b> open orders (including TP/SL legs)</li>
+          <li>Wipe the database — price alerts, order log, reviewer journal, <b>agent memory</b>, <b>reports</b>, monitor config</li>
+        </ul>
+        <p class="down">This cannot be undone.</p>
+        <label class="check">
+          <input type="checkbox" v-model="resetAck" :disabled="resetting" />
+          I understand — reset positions, orders, and the database.
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" @click="closeReset" :disabled="resetting">Cancel</button>
+        <button class="btn danger" @click="doReset" :disabled="!resetAck || resetting">
+          <span v-if="resetting" class="spinner"></span>{{ resetting ? 'Resetting…' : 'Reset everything' }}
+        </button>
+      </div>
+    </div>
   </div>
 </template>

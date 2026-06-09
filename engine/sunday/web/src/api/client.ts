@@ -43,6 +43,9 @@ export interface MonitorState {
 export interface JournalEntry {
   id: number; ts: string; date: string | null; author: string; title: string | null; body: string
 }
+export interface MemoryDoc { agent: string; content: string; updated_at: string | null }
+export interface MemoryIndexItem { agent: string; updated_at: string | null; size: number }
+export interface Report { id: number; ts: string; kind: string; title: string | null; body: string }
 
 const API = '/api'
 
@@ -104,4 +107,21 @@ export const api = {
   journal: (p: Record<string, unknown> = {}) => req<Page<JournalEntry>>(`/journal${qs(p)}`),
   journalEntry: (id: number) => req<JournalEntry>(`/journal/${id}`),
   createJournal: (body: Record<string, unknown>) => req<JournalEntry>(`/journal`, { method: 'POST', body: JSON.stringify(body) }),
+
+  // Agent memory warehouse (one long-term doc per agent — replaces MEMORY.md / RESEARCH.md).
+  memoryIndex: () => req<{ items: MemoryIndexItem[] }>(`/memory`),
+  memory: (agent: string) => req<MemoryDoc>(`/memory/${agent}`),
+  saveMemory: (agent: string, content: string) => req<MemoryDoc>(`/memory/${agent}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+
+  // friday's User-facing reports (big PnL / system error).
+  reports: (p: Record<string, unknown> = {}) => req<Page<Report>>(`/reports${qs(p)}`),
+  report: (id: number) => req<Report>(`/reports/${id}`),
+  createReport: (body: Record<string, unknown>) => req<Report>(`/reports`, { method: 'POST', body: JSON.stringify(body) }),
+
+  // Destructive test reset: closes all positions, cancels all open orders, wipes the DB.
+  resetAll: () => req<ResetResult>(`/admin/reset`, { method: 'POST' }),
+}
+
+export interface ResetResult {
+  ok: boolean; cancelled_orders: string[]; closed_positions: string[]; db_cleared: Record<string, number>
 }

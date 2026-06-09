@@ -113,6 +113,38 @@ curl -s  "http://127.0.0.1:7777/api/journal/12"            # 單篇全文
 
 reviewer 每日把復盤 POST 到這裡存進 DB，User 在 dashboard 的 **Journal** 分頁讀；`body` 用 markdown。
 
+## 長期記憶 `/api/memory`（每個 agent 的記憶倉庫，取代舊的 MEMORY.md / RESEARCH.md）
+
+每個 agent 在 Sunday 存**一份**長期記憶 markdown 文件。慣例（已寫進各 agent 系統提示詞）：
+**醒來先讀自己的、收工前整份寫回。**
+
+```bash
+curl -s  http://127.0.0.1:7777/api/memory/friday                 # 讀某 agent 的記憶全文（無內容回空文件，不報錯）
+curl -sX PUT http://127.0.0.1:7777/api/memory/friday \
+     -H 'Content-Type: application/json' -d '{"content":"# friday 記憶\n## 風控共識\n- ..."}'  # 整份覆寫
+curl -s  http://127.0.0.1:7777/api/memory                        # 索引：每個 agent 的 updated_at + size
+```
+
+記憶是**覆寫式**的整份文件：`GET` 讀回 → 就地增刪 → `PUT` 整份寫回（保持精簡，過期的刪掉）。
+記憶 agent：`friday` `analyst-flow` `analyst-news` `researcher` `risk-monitor` `reviewer`（watchdog 無）。
+讀是開放的——例如 analyst 可 `GET /api/memory/friday` 參考他的 watchlist / 風控共識。
+
+## 通報 `/api/reports`（friday → User 的重要通報）
+
+當發生**重要的事**（大量盈利 / 大量虧損 / 系統錯誤）就 POST 一則通報，User 在 dashboard 的
+**Reports** 分頁由近到遠讀。內容用 markdown、**不限字數，表達清楚最重要**。
+
+```bash
+curl -sX POST http://127.0.0.1:7777/api/reports -H 'Content-Type: application/json' -d '{
+  "kind":"profit", "title":"BTC 多單止盈 +18%",
+  "body":"## 發生什麼\n4h 突破後順勢做多，TP 觸發…\n## 影響\n權益 +18%…\n## 下一步\n…" }'
+curl -s  "http://127.0.0.1:7777/api/reports?page=1"              # 列出（新到舊，分頁；可加 &kind=）
+curl -s  "http://127.0.0.1:7777/api/reports/12"                  # 單則全文
+```
+
+`kind`：`profit` | `loss` | `system` | `info`（其他值存為 info，用於 UI 上色）。`title` 必填。
+這和 `/api/journal`（reviewer 每日排程復盤）不同——通報是**事件驅動**「你現在該知道」的快訊。
+
 ## Webhook（Sunday → evva swarm）
 
 `position_pnl`（倉位每 5% ROI）與 `price_alert`（提醒觸發）兩種事件，POST 到 `EVVA_WEBHOOK_URL`
@@ -122,4 +154,4 @@ reviewer 每日把復盤 POST 到這裡存進 DB，User 在 dashboard 的 **Jour
 ## Dashboard（人類在瀏覽器看）
 
 `http://127.0.0.1:7777/dashboard` —— TS + Vue 3 量化終端：Markets / Chart / Trade / Account /
-Indices / Alerts / Journal / Manual。人能做的，agent 用上面同一組端點也能做。
+Indices / Alerts / Reports / Journal / Memory / Manual。人能做的，agent 用上面同一組端點也能做。

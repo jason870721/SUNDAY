@@ -80,6 +80,27 @@ CREATE TABLE IF NOT EXISTS journal (
     body   TEXT NOT NULL                        -- markdown report
 );
 CREATE INDEX IF NOT EXISTS idx_journal_recent ON journal (id DESC);
+
+-- Agent memory warehouse (replaces the file-based MEMORY.md / RESEARCH.md): one
+-- long-term markdown doc per agent, overwritten wholesale. Each agent reads its doc on
+-- wake (GET /api/memory/{agent}) and writes it back at session end (PUT). One row/agent.
+CREATE TABLE IF NOT EXISTS memory (
+    agent      TEXT PRIMARY KEY,
+    content    TEXT NOT NULL DEFAULT '',
+    updated_at TEXT
+);
+
+-- User-facing reports: friday posts a notice here when something important happens
+-- (large profit / large loss / system error). Shown on the dashboard Reports page,
+-- newest first. Body is markdown, unbounded — clarity over brevity.
+CREATE TABLE IF NOT EXISTS report (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts    TEXT NOT NULL,                        -- created (server UTC, ISO)
+    kind  TEXT NOT NULL DEFAULT 'info',         -- info | profit | loss | system
+    title TEXT,
+    body  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_report_recent ON report (id DESC);
 """
 
 
@@ -110,6 +131,21 @@ def _db() -> sqlite3.Connection:
     if _conn is None:
         raise RuntimeError("store not connected — call connect() first")
     return _conn
+
+
+# Every table the proxy persists — the unit a test reset wipes (schema stays; rows go).
+_TABLES = ("alerts", "kv", "order_log", "journal", "memory", "report")
+
+
+def reset() -> dict[str, int]:
+    """Wipe ALL local durable state — alerts, kv (monitor config), order log, work
+    journal — for a clean test slate. Irreversible; schema is preserved. Returns the
+    row count removed per table. (Table names are fixed constants, so the f-string is
+    not an injection surface.)"""
+    with _LOCK:
+        counts = {t: _db().execute(f"DELETE FROM {t}").rowcount for t in _TABLES}
+        _db().commit()
+        return counts
 
 
 # --------------------------------------------------------------------------
@@ -247,4 +283,68 @@ def list_journal(author: str | None = None) -> list[dict]:
                 "SELECT * FROM journal WHERE author = ? ORDER BY id DESC", (author,)).fetchall()
         else:
             rows = _db().execute("SELECT * FROM journal ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# Agent memory warehouse — one long-term markdown doc per agent (replaces the
+# file-based MEMORY.md / RESEARCH.md). Read on wake, overwritten at session end.
+# --------------------------------------------------------------------------
+
+def get_memory(agent: str) -> dict | None:
+    with _LOCK:
+        row = _db().execute(
+            "SELECT agent, content, updated_at FROM memory WHERE agent = ?", (agent,)).fetchone()
+        return dict(row) if row else None
+
+
+def set_memory(agent: str, content: str) -> dict:
+    """Overwrite an agent's memory doc (upsert). Returns the stored row."""
+    ts = _now()
+    with _LOCK:
+        _db().execute(
+            "INSERT INTO memory (agent, content, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(agent) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+            (agent, content, ts),
+        )
+        _db().commit()
+    return {"agent": agent, "content": content, "updated_at": ts}
+
+
+def list_memory() -> list[dict]:
+    """All stored memory docs (used by the dashboard memory index)."""
+    with _LOCK:
+        rows = _db().execute("SELECT agent, content, updated_at FROM memory").fetchall()
+        return [dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# User-facing reports — friday's important notices (big PnL / system error)
+# --------------------------------------------------------------------------
+
+def add_report(title: str, body: str, kind: str = "info") -> dict:
+    """Persist one report (markdown body). Returns the stored row."""
+    ts = _now()
+    with _LOCK:
+        cur = _db().execute(
+            "INSERT INTO report (ts, kind, title, body) VALUES (?,?,?,?)", (ts, kind, title, body))
+        _db().commit()
+        rid = cur.lastrowid
+    return {"id": rid, "ts": ts, "kind": kind, "title": title, "body": body}
+
+
+def get_report(report_id: int) -> dict | None:
+    with _LOCK:
+        row = _db().execute("SELECT * FROM report WHERE id = ?", (report_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_reports(kind: str | None = None) -> list[dict]:
+    """Reports newest-first (optionally one kind), for the paged dashboard."""
+    with _LOCK:
+        if kind:
+            rows = _db().execute(
+                "SELECT * FROM report WHERE kind = ? ORDER BY id DESC", (kind,)).fetchall()
+        else:
+            rows = _db().execute("SELECT * FROM report ORDER BY id DESC").fetchall()
         return [dict(r) for r in rows]
