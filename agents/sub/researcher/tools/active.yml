@@ -6,3 +6,6 @@
 - read          # 讀 docs/PRD 票（長期研究記憶改走 http_request → /api/memory/researcher）
 - edit
 - write         # 開 docs/PRD/PRD-*.md（長期研究記憶改走 http_request → /api/memory/researcher）
+- alarm_create
+- alarm_list
+- alarm_cancel

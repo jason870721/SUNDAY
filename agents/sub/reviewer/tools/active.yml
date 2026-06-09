@@ -3,3 +3,6 @@
 - http_request  # read /api/account/* (trades/orders/pnl) + POST the daily report to /api/journal
 - skill
 - read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory/reviewer)
+- alarm_create
+- alarm_list
+- alarm_cancel

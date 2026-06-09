@@ -9,3 +9,6 @@
 - edit
 - write         # file docs/PRD/PRD-*.md (long-term memory now via http_request → /api/memory/friday)
 - bash
+- alarm_create
+- alarm_list
+- alarm_cancel

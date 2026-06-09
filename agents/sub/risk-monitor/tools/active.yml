@@ -5,3 +5,6 @@
 - read          # read docs/PRD tickets (risk consensus / memory now via http_request → /api/memory)
 - edit
 - write
+- alarm_create
+- alarm_list
+- alarm_cancel
