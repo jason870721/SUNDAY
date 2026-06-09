@@ -1,9 +1,9 @@
-"""Candles — the in-engine OHLCV value type shared by exchange/strategy/regime.
+"""Candles — the column-oriented OHLCV value type shared by klines/indicators.
 
 Keeping one small column-oriented type (rather than passing raw exchange arrays
-around) decouples the strategy/regime logic from the exchange wire format and
-makes both unit-testable without an exchange. ``from_klines`` parses the Binance
-USDⓈ-M ``/fapi/v1/klines`` shape; everything downstream reads ``.closes`` etc.
+around) decouples the indicator logic from the exchange wire format and makes it
+unit-testable without an exchange. ``from_klines`` parses the Binance USDⓈ-M
+``/fapi/v1/klines`` shape; everything downstream reads ``.closes`` etc.
 """
 
 from __future__ import annotations

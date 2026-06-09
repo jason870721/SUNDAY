@@ -1,19 +1,14 @@
-"""Pure-stdlib technical indicators for Sunday's Gate-1 strategies.
+"""Pure-stdlib technical indicators for the /api/klines/indicators panel.
 
-Gate-1 strategies are deliberately simple (PRD §7.2), so the indicator set is
-small and implemented in plain Python — no numpy/pandas. Two reasons:
+Implemented in plain Python (no numpy/pandas) for two reasons:
 
-1. It keeps the engine light (Gate-1 doesn't need a dataframe stack), and
-2. every signal becomes unit-testable in any environment (stdlib only).
+1. it keeps the proxy light, and
+2. every signal is unit-testable in any environment (stdlib only).
 
-The SAME functions back both the live strategy decision (``strategy.py``) and the
-``/advisor`` decision-support panel (via ``advisor.py``), so an agent reasons over exactly
-the numbers the engine acted on — that DRY is what makes the panel honest
-(PRD §7.9 legibility). pandas/numpy return as a Gate-2 *modeling* extra, not here.
-
-All functions take plain ``list[float]`` (oldest-first) and return ``None`` when
-there isn't enough data rather than raising — callers treat "not enough bars" as
-"no opinion", which is the correct trading stance on a cold series.
+The agent reads exactly these computed numbers instead of piping raw OHLCV through
+an LLM to recompute RSI/MACD by hand. All functions take plain ``list[float]``
+(oldest-first) and return ``None`` when there isn't enough data rather than raising —
+callers treat "not enough bars" as "no opinion".
 """
 
 from __future__ import annotations
@@ -117,8 +112,7 @@ def _wilder_smooth(xs: list[float], period: int) -> list[float]:
 def adx(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> float | None:
     """Wilder's ADX (trend strength, 0–100). Needs ~``2*period+1`` bars.
 
-    High ADX (>~25) = strong trend → momentum's regime; low ADX (<~20) = chop →
-    mean-reversion's regime. regime.py reads this to classify the tape.
+    High ADX (>~25) = strong trend; low ADX (<~20) = chop / range.
     """
     n = len(closes)
     if n < 2 * period + 1 or len(highs) != n or len(lows) != n:
@@ -152,3 +146,53 @@ def adx(highs: list[float], lows: list[float], closes: list[float], period: int 
     for i in range(period, len(dxs)):
         adx_val = (adx_val * (period - 1) + dxs[i]) / period
     return adx_val
+
+
+def _ema_series(values: list[float], period: int) -> list[float]:
+    """Full EMA series (SMA-seeded). Needed for MACD, which takes the EMA *of* the
+    MACD line — a single trailing value (``ema()``) isn't enough."""
+    if period <= 0 or len(values) < period:
+        return []
+    k = 2.0 / (period + 1)
+    e = sum(values[:period]) / period
+    out = [e]
+    for v in values[period:]:
+        e = v * k + e * (1.0 - k)
+        out.append(e)
+    return out
+
+
+def macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict | None:
+    """MACD line / signal / histogram. Needs ``slow + signal`` closes.
+
+    Standard 12/26/9: macd = EMA12 − EMA26, signal = EMA9 of the macd line,
+    hist = macd − signal. The fast and slow EMA series are aligned on their tails
+    before subtracting (the fast series starts earlier).
+    """
+    if len(closes) < slow + signal:
+        return None
+    fast_s = _ema_series(closes, fast)
+    slow_s = _ema_series(closes, slow)
+    n = len(slow_s)
+    macd_line = [f - s for f, s in zip(fast_s[-n:], slow_s)]
+    signal_s = _ema_series(macd_line, signal)
+    if not signal_s:
+        return None
+    macd_val, sig_val = macd_line[-1], signal_s[-1]
+    return {"macd": macd_val, "signal": sig_val, "hist": macd_val - sig_val}
+
+
+def atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> float | None:
+    """Wilder's ATR (average true range). Needs ``period + 1`` bars.
+
+    Volatility in price units — what a stop-distance or position-sizing read uses.
+    """
+    if len(closes) < period + 1:
+        return None
+    trs = true_ranges(highs, lows, closes)
+    if len(trs) < period:
+        return None
+    a = sum(trs[:period]) / period       # seed = SMA of first `period` true ranges
+    for tr in trs[period:]:
+        a = (a * (period - 1) + tr) / period
+    return a

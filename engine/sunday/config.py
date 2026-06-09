@@ -1,57 +1,56 @@
+"""Sunday proxy configuration (milestone-6).
+
+Sunday is a stateless Binance USDⓈ-M proxy for agents. Two boundaries to configure:
+
+  * the exchange — **market data from mainnet** (public, no key) + **trading on
+    testnet** (keyed, fake money); and
+  * the outbound webhook — Sunday → evva swarm (RP-9), for position-PnL / price alerts.
+
+Everything else is small operational knobs (sqlite path, monitor cadence, cache TTLs).
+No Postgres/Redis: the only durable state is the alerts table in a single sqlite file.
+"""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-def _split(csv: str) -> list[str]:
-    return [s.strip().upper() for s in csv.split(",") if s.strip()]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql://root:root@localhost:5432/sunday"
-    redis_url: str = "redis://localhost:6379/0"
-    evva_webhook_url: str = "http://127.0.0.1:8888/api/swarm/sunday/event"
-
+    # --- exchange ---------------------------------------------------------
+    # Market data reads from MAINNET (no key needed). Trading uses the TESTNET
+    # account (keys below). Agents never see these keys — that is the whole point
+    # of the proxy: Sunday holds the keys, agents hold only HTTP.
     binance_testnet_key: str = ""
     binance_testnet_secret: str = ""
 
+    # --- outbound webhook (Sunday -> evva swarm, RP-9) --------------------
+    # POST {title, body, data, to}; deliberately token-free on the swarm side.
+    evva_webhook_url: str = "http://127.0.0.1:8888/api/swarm/sunday/event"
+
+    # --- http server ------------------------------------------------------
     sunday_host: str = "127.0.0.1"
     sunday_port: int = 7777
 
-    # trading basket (milestone-4: multi-symbol). `symbol` stays the primary/default
-    # for single-symbol endpoint params; `symbols` is the basket the watcher loops.
-    symbol: str = "BTCUSDT"
-    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT"
-    timeframe: str = "1h"
-    ema_fast: int = 20
-    ema_slow: int = 50
-    target_notional_usd: float = 500.0  # baseline (momentum/mean_reversion) entry size
-    leverage: int = 3
+    # --- local state ------------------------------------------------------
+    # Alerts (req 6) persist here; monitor baselines stay in-memory (rebuilt on boot).
+    sqlite_path: str = "sunday.db"
 
-    # deterministic risk envelope (hard caps; NOT the LLM's job) — milestone-4 test caps
-    max_position_usd: float = 1500.0
-    max_total_exposure_usd: float = 3000.0   # < 3×single → forces selectivity across the basket
-    max_leverage: int = 3
-    max_drawdown_pct: float = 5.0            # drawdown circuit breaker → flatten + lock
-    stop_pct: float = 0.02
+    # Default market for endpoints whose `symbol` query param is optional.
+    default_symbol: str = "BTCUSDT"
 
-    # milestone-4 directed mode: conviction (0..1) → size. Below the floor = stay flat.
-    conviction_floor: float = 0.2
+    # --- position monitor (req 5) ----------------------------------------
+    # Webhook the swarm every `monitor_step_pct` move in an open position's ROI%.
+    monitor_enabled: bool = True
+    monitor_step_pct: float = 5.0
+    monitor_poll_sec: int = 15        # position-book refresh / REST fallback cadence
 
-    # ablation: symbols forced to info-OFF (the desk gets no feeds for them). Empty = all ON.
-    info_off_symbols: str = ""
+    # --- realtime price hub (req 5/6) ------------------------------------
+    ws_enabled: bool = True            # set false to run monitor/alerts on REST polling only
 
-    # event watcher / dead-man
-    tick_interval_sec: int = 60        # how often the watcher ingests feeds + checks regime/watchdog
-    heartbeat_timeout_sec: int = 5400  # 90m without a swarm heartbeat -> safe-mode
-
-    @property
-    def symbol_list(self) -> list[str]:
-        return _split(self.symbols) or [self.symbol]
-
-    @property
-    def info_off_list(self) -> list[str]:
-        return _split(self.info_off_symbols)
+    # --- external-indices cache TTLs (seconds, req 4) --------------------
+    indices_ttl_fast: int = 300        # crypto dominance / total market cap (CoinGecko)
+    indices_ttl_macro: int = 600       # equities/macro (Stooq)
+    indices_ttl_feargreed: int = 3600  # crypto Fear & Greed (alternative.me)
 
 
 settings = Settings()

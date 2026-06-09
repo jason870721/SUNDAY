@@ -1,24 +1,20 @@
 [project]
 name = "sunday-engine"
 version = "0.1.0"
-description = "Sunday — Binance USDⓈ-M perps trading engine, supervised by an evva swarm"
+description = "Sunday — an agent-native Binance USDⓈ-M proxy service"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pydantic-settings>=2.2",
-    "psycopg[binary]>=3.1",
-    "psycopg-pool>=3.2",
-    "redis>=5.0",
     "ccxt>=4.3",
+    "websockets>=12.0",
 ]
-# The pure decision core (indicators / strategy / risk / regime / advisor /
-# execution / events) is stdlib-only — no pandas/numpy, and the webhook uses urllib
-# (no httpx) — so every decision is unit-testable anywhere via `python -m unittest`.
-# The live exchange adapter uses ccxt (USDⓈ-M testnet). The heavy quant/ML stack
-# (pandas/numpy + the backtest data tooling) lands as a Gate-2 *modeling* extra.
-[project.optional-dependencies]
-modeling = ["pandas>=2.2", "numpy>=1.26"]
+# No Postgres/Redis: the only durable state is the alerts table in a single sqlite
+# file (stdlib sqlite3). ccxt drives both the mainnet market-data instance and the
+# testnet trade instance; websockets powers the realtime price hub (monitor/alerts).
+# The pure logic (indicators / pagination / alerts / indices parsers / events) is
+# stdlib-only, so it stays unit-testable anywhere via `python -m unittest`.
 
 [build-system]
 requires = ["setuptools>=68"]

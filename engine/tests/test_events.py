@@ -1,53 +1,33 @@
-"""Unit tests for the webhook event builders + stdlib transport."""
+"""Unit tests for the webhook event builders (pure; shape the swarm consumes)."""
 
-import json
 import unittest
 
-from sunday import events
-from sunday.regime import RegimeRead
+from sunday import events as E
 
 
-class TestBuildEvent(unittest.TestCase):
-    def test_self_sufficient_payload_shape(self):
-        ev = events.build_event(
-            "regime_shift", title="t", body="b",
-            status={"strategy": "momentum"}, rationale="why", suggested_action="do x",
-        )
-        self.assertEqual(set(ev), {"title", "body", "data", "to"})
+class TestEvents(unittest.TestCase):
+    def test_build_event_shape(self):
+        self.assertEqual(E.build_event("t", "b", {"x": 1}, "leader"),
+                         {"title": "t", "body": "b", "data": {"x": 1}, "to": "leader"})
+
+    def test_build_event_defaults(self):
+        ev = E.build_event("t", "b")
         self.assertEqual(ev["to"], "leader")
-        self.assertEqual(ev["data"]["event_type"], "regime_shift")
-        self.assertEqual(ev["data"]["status"], {"strategy": "momentum"})
-        self.assertEqual(ev["data"]["rationale"], "why")
-        self.assertEqual(ev["data"]["suggested_action"], "do x")
+        self.assertEqual(ev["data"], {})
 
-    def test_regime_shift_event_suggests_matching_strategy(self):
-        rr = RegimeRead("ranging", 18.0, 0.9, "ADX low → 震盪")
-        ev = events.regime_shift_event("trending", rr, status={"alive": True})
-        self.assertIn("mean_reversion", ev["data"]["suggested_action"])  # ranging → mean_reversion
-        self.assertEqual(ev["data"]["status"], {"alive": True})
-        self.assertIn("trending → ranging", ev["title"])
+    def test_position_pnl_event(self):
+        ev = E.position_pnl_event("BTCUSDT", "long", 15.0, 30.0, 105.0, 100.0, 5.0)
+        self.assertEqual(ev["data"]["event_type"], "position_pnl")
+        self.assertEqual(ev["data"]["symbol"], "BTCUSDT")
+        self.assertEqual(ev["data"]["roi_pct"], 15.0)
+        self.assertIn("suggested_action", ev["data"])
 
-    def test_engine_degraded_event(self):
-        ev = events.engine_degraded_event("exchange timeout")
-        self.assertEqual(ev["data"]["event_type"], "engine_degraded")
-        # honest hint: no HTTP restart endpoint — check /status, tell the User, halt-safe meanwhile
-        sa = ev["data"]["suggested_action"]
-        self.assertIn("/status", sa)
-        self.assertIn("safe", sa)
-
-
-class TestTransport(unittest.TestCase):
-    def test_build_request_is_json_post(self):
-        req = events._build_request("http://x/y", {"a": 1})
-        self.assertEqual(req.method, "POST")
-        self.assertEqual(req.get_header("Content-type"), "application/json")
-        self.assertEqual(json.loads(req.data), {"a": 1})
-
-    def test_post_never_raises_on_bad_host(self):
-        # unroutable → returns (None, False), does not raise (fire-and-forget)
-        status, ok = events.post("http://127.0.0.1:1/nope", {"x": 1}, timeout=0.2)
-        self.assertFalse(ok)
-        self.assertIsNone(status)
+    def test_price_alert_event(self):
+        ev = E.price_alert_event(
+            {"id": 7, "symbol": "ETHUSDT", "kind": "price_above", "threshold": 4000, "note": None}, 4010)
+        self.assertEqual(ev["data"]["event_type"], "price_alert")
+        self.assertEqual(ev["data"]["alert_id"], 7)
+        self.assertEqual(ev["data"]["price"], 4010)
 
 
 if __name__ == "__main__":

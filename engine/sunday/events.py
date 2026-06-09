@@ -1,14 +1,11 @@
-"""Outbound webhook events: Sunday → swarm (RP-9 `POST /api/swarm/{ref}/event`).
+"""Outbound webhook events: Sunday → evva swarm (RP-9 ``POST /api/swarm/{ref}/event``).
 
-PURE + stdlib (urllib, no httpx): builders assemble the payload, `post` fires it.
-Events are **self-sufficient** (PRD §7.9 / M3-T5): the payload carries a status
-snapshot + the rationale + a suggested_action, so a webhook-woken agent can size
-up the situation on its first turn without a round-trip.
-
-The live `notify()` (which also logs to webhook_log + stamps last_event_ts) lives
-in `engine.py`, where the store is in scope — keeping this module import-pure so
-the payload shape + transport are unit-testable with the stdlib alone. `post`
-NEVER raises: Sunday must keep trading even when the swarm is unreachable.
+PURE + stdlib (urllib, no httpx): builders assemble the ``{title, body, data, to}``
+payload the swarm webapi expects; ``post`` fires it and NEVER raises (Sunday must keep
+serving even when the swarm is down). Milestone-6 carries two event kinds — a
+position's PnL crossing a step (req 5) and a price alert firing (req 6). Both are
+**self-sufficient**: the payload includes the structured numbers + a suggested next
+action so a woken agent can act on its first turn without a round-trip.
 """
 
 from __future__ import annotations
@@ -17,88 +14,42 @@ import json
 import urllib.request
 from typing import Any
 
-# regime label → which strategy that regime favours (carried as suggested_action).
-_REGIME_HINT = {
-    "trending": "趨勢盤 → 建議切到 momentum（順勢）",
-    "ranging": "震盪盤 → 建議切到 mean_reversion（逆勢）",
-    "volatile": "高波動 → 建議 flat 觀望，避免被掃",
-    "unknown": "盤性未明 → 維持現狀、觀望",
-}
+
+def build_event(title: str, body: str, data: dict | None = None, to: str = "leader") -> dict:
+    """Assemble the swarm webhook payload: {title, body, data, to}."""
+    return {"title": title, "body": body, "data": data or {}, "to": to}
 
 
-def build_event(
-    event_type: str, title: str, body: str,
-    status: Any = None, rationale: str | None = None,
-    suggested_action: str | None = None, to: str = "leader",
-) -> dict:
-    """Assemble a self-sufficient webhook payload: {title, body, data, to}."""
-    return {
-        "title": title,
-        "body": body,
-        "data": {
-            "event_type": event_type,
-            "status": status,
-            "rationale": rationale,
-            "suggested_action": suggested_action,
-        },
-        "to": to,
-    }
+def position_pnl_event(symbol: str, side: str, roi_pct: float, upnl: float | None,
+                       mark: float | None, entry: float | None, step_pct: float,
+                       to: str = "leader") -> dict:
+    """`position_pnl`: an open position's ROI% crossed a `step_pct` boundary (req 5)."""
+    arrow = "▲" if roi_pct >= 0 else "▼"
+    title = f"{symbol} {side} ROI {arrow}{roi_pct:+.1f}%"
+    body = (f"{symbol}（{side}）未實現損益 {roi_pct:+.1f}%"
+            f"（uPnL={upnl}, mark={mark}, entry={entry}）— 每 {step_pct:.0f}% 通報一次。")
+    return build_event(title, body, data={
+        "event_type": "position_pnl",
+        "symbol": symbol, "side": side, "roi_pct": round(roi_pct, 2),
+        "unrealized_pnl": upnl, "mark": mark, "entry": entry,
+        "suggested_action": "查 GET /api/account/positions 對帳，評估調整 TP/SL 或加減倉。",
+    }, to=to)
 
 
-def regime_shift_event(prev_label: str | None, regime, status: Any = None) -> dict:
-    """`regime_shift`: prev → new label, with the read's rationale + a matching hint.
-
-    `regime` is a regime.RegimeRead (has .label + .rationale)."""
-    title = f"regime shift：{prev_label} → {regime.label}"
-    hint = _REGIME_HINT.get(regime.label, _REGIME_HINT["unknown"])
-    return build_event("regime_shift", title, regime.rationale,
-                       status=status, rationale=regime.rationale, suggested_action=hint)
-
-
-def engine_degraded_event(detail: str, status: Any = None) -> dict:
-    """`engine_degraded`: the engine can't trade — tell the leader to look (no HTTP restart)."""
-    return build_event(
-        "engine_degraded", "engine degraded", detail, status=status,
-        rationale=detail,
-        suggested_action="引擎異常 → 查 /status 對帳；Sunday 無 HTTP 重啟端點，請通報 User 重啟服務，"
-                         "其間可 POST /halt {mode:'safe'} 凍新倉保護現有部位",
-    )
-
-
-def risk_breach_event(detail: str, status: Any = None) -> dict:
-    """`risk_breach`: a deterministic fuse fired (e.g. drawdown) — leader must review."""
-    return build_event(
-        "risk_breach", "risk breach", detail, status=status,
-        rationale=detail, suggested_action="風控熔斷已動作 → 複盤曝險，考慮縮封套或 halt",
-    )
-
-
-def safe_mode_event(detail: str, status: Any = None) -> dict:
-    """`safe_mode_entered`: heartbeat timed out → new entries frozen."""
-    return build_event(
-        "safe_mode_entered", "safe-mode entered", detail, status=status,
-        rationale=detail, suggested_action="腦死保護啟動 → 恢復 heartbeat 後再解除",
-    )
-
-
-_DESK_HINT = {
-    "funding_extreme": "資金費極端 → 查 /desk?symbol=，評估收 carry 還是站旁邊（小心反身性逆轉）",
-    "oi_surge": "持倉劇變 → 查 /desk?symbol=，評估方向與擁擠度",
-    "basis_stretch": "基差拉伸 → 查 /desk?symbol=，評估反身性風險",
-    "vol_spike": "波動跳升 → 查 /desk?symbol=，慎開倉",
-    "notable": "此標的此刻值得注意 → 查 /desk?symbol=，評估是否值得一個 thesis",
-}
-
-
-def notable_event(symbol: str, event_type: str, driver: str, score: float,
-                  metrics: dict | None = None, status: Any = None) -> dict:
-    """`funding_extreme`/`oi_surge`/`basis_stretch`/`vol_spike`: Sunday's notable-score
-    wake — a symbol is doing something worth a research round (milestone-4 T2)."""
-    m = metrics or {}
-    body = (f"{symbol} notable={score:.2f}（driver: {driver}）｜"
-            f"funding {m.get('funding_annual_pct')}%/yr, basis {m.get('basis_bps')}bps")
-    return build_event(event_type, f"notable: {symbol} · {driver}", body, status=status,
-                       rationale=body, suggested_action=_DESK_HINT.get(event_type, _DESK_HINT["notable"]))
+def price_alert_event(alert: dict, price: float, to: str = "leader") -> dict:
+    """`price_alert`: a user/agent alert condition fired (req 6)."""
+    kind, sym, thr = alert.get("kind"), alert.get("symbol"), alert.get("threshold")
+    desc = {
+        "price_above": f"{sym} 突破 {thr}（現價 {price}）",
+        "price_below": f"{sym} 跌破 {thr}（現價 {price}）",
+        "pct_move": f"{sym} 自設定點波動達 ±{thr}%（現價 {price}）",
+    }.get(kind, f"{sym} alert（現價 {price}）")
+    return build_event(f"alert: {desc}", desc, data={
+        "event_type": "price_alert",
+        "alert_id": alert.get("id"), "symbol": sym, "kind": kind,
+        "threshold": thr, "price": price, "note": alert.get("note"),
+        "suggested_action": f"查 GET /api/klines?symbol={sym} 看脈絡，評估進出場或調整部位。",
+    }, to=to)
 
 
 def _build_request(url: str, payload: dict) -> urllib.request.Request:

@@ -93,5 +93,35 @@ class TestADX(unittest.TestCase):
         self.assertIsNone(ind.adx([1, 2], [1, 2], [1, 2], 14))
 
 
+class TestMACD(unittest.TestCase):
+    def test_insufficient(self):
+        self.assertIsNone(ind.macd([1.0] * 10))  # < slow + signal
+
+    def test_constant_series_is_zero(self):
+        m = ind.macd([5.0] * 60)
+        self.assertIsNotNone(m)
+        self.assertAlmostEqual(m["macd"], 0.0)
+        self.assertAlmostEqual(m["signal"], 0.0)
+        self.assertAlmostEqual(m["hist"], 0.0)
+
+    def test_rising_series_positive_macd(self):
+        m = ind.macd([float(i) for i in range(1, 80)])
+        self.assertIsNotNone(m)
+        self.assertGreater(m["macd"], 0.0)            # fast EMA above slow on an uptrend
+        self.assertAlmostEqual(m["hist"], m["macd"] - m["signal"])
+
+
+class TestATR(unittest.TestCase):
+    def test_insufficient(self):
+        self.assertIsNone(ind.atr([1.0], [1.0], [1.0], 14))
+
+    def test_constant_bar_height_equals_atr(self):
+        # Every bar spans exactly 2.0 high-to-low with no gaps → ATR == 2.0.
+        closes = [100.0] * 30
+        highs = [101.0] * 30
+        lows = [99.0] * 30
+        self.assertAlmostEqual(ind.atr(highs, lows, closes, 14), 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
