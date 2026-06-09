@@ -1,106 +1,152 @@
 """/api/account — positions / PnL / orders / trades on the testnet account (req 3).
 
-All endpoints read the testnet book (the proxy holds the keys). Lists paginate via
-the shared envelope. Binance fapi requires a symbol for order/trade history, so those
-two endpoints take a required `symbol`.
+Reads come from Binance's signed fapi REST directly (see exchange.py), so every row is
+the raw Binance shape — leverage / liquidationPrice / marginType / stopPrice intact.
+Lists paginate via the shared envelope. Binance requires a symbol for order/trade history.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from .. import exchange
+from .. import exchange, store
 from ..apiutil import ex_call, require_trade_key, to_float
-from ..monitor import position_roi
 from ..pagination import paginate
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
+# Order-journal fields surfaced on a position (the agent's logged decision).
+_ORDER_FIELDS = ("order_id", "ts", "side", "type", "qty", "notional_usd", "price",
+                 "leverage", "margin_mode", "reduce_only", "take_profit", "stop_loss")
 
-def _position_row(p: dict) -> dict:
-    contracts = to_float(p.get("contracts"))
+
+def _leg(order_type: str | None) -> str | None:
+    """Classify a Binance order type as a take-profit / stop-loss trigger leg."""
+    t = (order_type or "").upper()
+    if "TAKE_PROFIT" in t:
+        return "take_profit"
+    if "STOP" in t:
+        return "stop_loss"
+    return None
+
+
+def _safe_leverage() -> dict:
+    try:
+        return exchange.leverage_by_symbol()
+    except Exception:
+        return {}
+
+
+def _position_row(p: dict, journal: dict | None = None) -> dict:
+    amt = to_float(p.get("positionAmt")) or 0.0
     mark = to_float(p.get("markPrice"))
+    lev = to_float(p.get("leverage"))
+    upnl = to_float(p.get("unRealizedProfit"))
+    notional = abs(amt * (mark or 0.0))
+    margin = notional / lev if (lev and notional) else None
+    roi = (upnl / margin * 100.0) if (upnl is not None and margin) else None
+    liq = to_float(p.get("liquidationPrice"))
+    log = (journal or {}).get(p.get("symbol"))
     return {
         "symbol": p.get("symbol"),
-        "side": p.get("side"),
-        "qty": contracts,
+        "side": "long" if amt > 0 else "short",
+        "qty": abs(amt),
         "entry": to_float(p.get("entryPrice")),
         "mark": mark,
-        "leverage": to_float(p.get("leverage")),
-        "margin_mode": p.get("marginMode"),
-        "notional": abs((contracts or 0) * (mark or 0)),
-        "unrealized_pnl": to_float(p.get("unrealizedPnl")),
-        "roi_pct": position_roi(p),
-        "liquidation_price": to_float(p.get("liquidationPrice")),
+        "leverage": int(lev) if lev else None,
+        "margin_mode": (p.get("marginType") or "").lower() or None,
+        "notional": notional,
+        "unrealized_pnl": upnl,
+        "roi_pct": round(roi, 2) if roi is not None else None,
+        # Binance reports 0 for a cross position (liquidation is account-wide) → none.
+        "liquidation_price": liq if liq else None,
+        # joined from the order journal — the agent's rationale + params for this symbol
+        "memo": log.get("memo") if log else None,
+        "order": {k: log.get(k) for k in _ORDER_FIELDS} if log else None,
     }
 
 
-def _order_row(o: dict) -> dict:
+def _order_row(o: dict, lev_by_symbol: dict | None = None) -> dict:
+    typ = (o.get("type") or "").upper()
+    trig = to_float(o.get("stopPrice"))
+    amount = to_float(o.get("origQty")) or 0.0
+    filled = to_float(o.get("executedQty")) or 0.0
     return {
-        "id": o.get("id"), "symbol": o.get("symbol"), "type": o.get("type"),
-        "side": o.get("side"), "price": to_float(o.get("price")),
-        "amount": to_float(o.get("amount")), "filled": to_float(o.get("filled")),
-        "remaining": to_float(o.get("remaining")), "status": o.get("status"),
-        "reduce_only": o.get("reduceOnly"), "trigger_price": to_float(o.get("triggerPrice")),
-        "ts": o.get("timestamp"), "client_order_id": o.get("clientOrderId"),
+        "id": str(o.get("orderId")),
+        "symbol": o.get("symbol"),
+        "type": typ.lower(),
+        "side": (o.get("side") or "").lower(),
+        "price": to_float(o.get("price")) or None,
+        "amount": amount,
+        "filled": filled,
+        "remaining": amount - filled,
+        "status": (o.get("status") or "").lower(),
+        "reduce_only": o.get("reduceOnly"),
+        "trigger_price": trig if trig else None,
+        "tp_sl": _leg(typ),
+        "leverage": (lev_by_symbol or {}).get(o.get("symbol")),
+        "ts": o.get("time"),
+        "client_order_id": o.get("clientOrderId"),
     }
 
 
 def _trade_row(t: dict) -> dict:
-    info = t.get("info") or {}
-    fee = t.get("fee") or {}
     return {
-        "id": t.get("id"), "order": t.get("order"), "symbol": t.get("symbol"),
-        "side": t.get("side"), "price": to_float(t.get("price")),
-        "amount": to_float(t.get("amount")), "cost": to_float(t.get("cost")),
-        "fee": to_float(fee.get("cost")), "fee_currency": fee.get("currency"),
-        "realized_pnl": to_float(info.get("realizedPnl")), "ts": t.get("timestamp"),
+        "id": str(t.get("id")), "order": str(t.get("orderId")), "symbol": t.get("symbol"),
+        "side": (t.get("side") or "").lower(), "price": to_float(t.get("price")),
+        "amount": to_float(t.get("qty")), "cost": to_float(t.get("quoteQty")),
+        "fee": to_float(t.get("commission")), "fee_currency": t.get("commissionAsset"),
+        "realized_pnl": to_float(t.get("realizedPnl")), "ts": t.get("time"),
     }
 
 
 @router.get("/positions")
 def positions(page: int = 1, page_size: int = 50) -> dict:
-    """Open positions with per-position ROI%."""
+    """Open positions with ROI%, leverage, liquidation price + the agent's order memo."""
     require_trade_key()
     raw = ex_call(exchange.fetch_positions)
-    return paginate([_position_row(p) for p in raw], page, page_size)
+    journal = {p.get("symbol"): store.latest_order(p.get("symbol")) for p in raw}
+    return paginate([_position_row(p, journal) for p in raw], page, page_size)
 
 
 @router.get("/balance")
 def balance() -> dict:
-    """Account equity + free/used margin (USDT)."""
+    """Account equity / free / used margin + total unrealized PnL (USDT)."""
     require_trade_key()
-    bal = ex_call(exchange.fetch_balance)
-    total = bal.get("total") or {}
+    a = ex_call(exchange.fetch_account)
     return {
-        "equity": to_float(total.get("USDT")),
-        "free": to_float((bal.get("free") or {}).get("USDT")),
-        "used": to_float((bal.get("used") or {}).get("USDT")),
-        "assets": {k: v for k, v in total.items() if v},
+        "equity": to_float(a.get("totalMarginBalance")),
+        "wallet": to_float(a.get("totalWalletBalance")),
+        "free": to_float(a.get("availableBalance")),
+        "used": to_float(a.get("totalPositionInitialMargin")),
+        "unrealized_pnl": to_float(a.get("totalUnrealizedProfit")),
     }
 
 
 @router.get("/pnl")
 def pnl() -> dict:
-    """Account PnL summary: equity + total unrealized + per-position breakdown.
-    (Per-symbol realized PnL is available via /api/account/trades.)"""
+    """Account PnL: equity + total unrealized + per-position breakdown.
+    Per-symbol realized PnL is available via /api/account/trades."""
     require_trade_key()
-    positions_raw = ex_call(exchange.fetch_positions)
-    bal = ex_call(exchange.fetch_balance)
-    rows = [_position_row(p) for p in positions_raw]
+    raw = ex_call(exchange.fetch_positions)
+    acct = ex_call(exchange.fetch_account)
+    journal = {p.get("symbol"): store.latest_order(p.get("symbol")) for p in raw}
     return {
-        "equity": to_float((bal.get("total") or {}).get("USDT")),
-        "unrealized_pnl": sum(r["unrealized_pnl"] or 0 for r in rows),
-        "positions": rows,
+        "equity": to_float(acct.get("totalMarginBalance")),
+        "unrealized_pnl": to_float(acct.get("totalUnrealizedProfit")),
+        "positions": [_position_row(p, journal) for p in raw],
     }
 
 
 @router.get("/orders/open")
 def open_orders(symbol: str | None = None, page: int = 1, page_size: int = 50) -> dict:
-    """Open (resting) orders, optionally for one symbol."""
+    """Open (resting) orders, newest first — each annotated with its symbol's leverage
+    and a tp_sl classification (take_profit / stop_loss / null)."""
     require_trade_key()
     rows = ex_call(lambda: exchange.fetch_open_orders(symbol))
-    return paginate([_order_row(o) for o in rows], page, page_size)
+    lev = _safe_leverage()
+    rows = sorted(rows, key=lambda o: o.get("time") or 0, reverse=True)
+    return paginate([_order_row(o, lev) for o in rows], page, page_size)
 
 
 @router.get("/orders")
@@ -109,7 +155,8 @@ def order_history(symbol: str, start: int | None = None, limit: int = 100,
     """Order history for `symbol` (required by Binance fapi), newest first, paginated."""
     require_trade_key()
     rows = ex_call(lambda: exchange.fetch_orders(symbol, since=start, limit=min(limit, 1000)))
-    return paginate([_order_row(o) for o in reversed(rows)], page, page_size)
+    lev = _safe_leverage()
+    return paginate([_order_row(o, lev) for o in reversed(rows)], page, page_size)
 
 
 @router.get("/trades")

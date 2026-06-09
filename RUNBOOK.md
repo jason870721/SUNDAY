@@ -1,8 +1,20 @@
 # Sunday — Runbook (milestone-6: agent-native Binance proxy)
 
-How to run and **validate** the proxy. The pure logic is unit-tested anywhere (stdlib
-only); the live exchange / websocket / dashboard run in *your* environment (they need
-`pip install`, network, and a testnet key — none of which exist in the CI sandbox).
+How to run, configure, and **validate** the proxy. The pure logic is unit-tested anywhere
+(stdlib only); the live exchange / websocket / dashboard run in *your* environment (they
+need `pip install`, network, and a testnet key — none exist in the CI sandbox).
+
+## TL;DR
+
+```bash
+cd engine
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e .                  # fastapi / uvicorn / pydantic-settings / ccxt / websockets
+cp .env.example .env              # fill BINANCE_TESTNET_KEY / SECRET (market data needs no key)
+python -m sunday                  # serves :7777 — dashboard is pre-built, no Node needed
+```
+
+Open `http://127.0.0.1:7777/dashboard` (human) or `GET /manual` (the agent API contract).
 
 ---
 
@@ -25,28 +37,30 @@ only); the live exchange / websocket / dashboard run in *your* environment (they
 ## 1. Prerequisites
 
 - **Python ≥ 3.11**. (No Postgres, no Redis — a single sqlite file is the only state.)
-- **Node ≥ 20** (only to *build* the dashboard; the engine serves the committed `dist/`).
-- **Binance USDⓈ-M testnet** API key + secret (for trading; market data needs none).
+- **Node ≥ 20** — *optional*; only to rebuild the dashboard. A pre-built `dist/` is committed,
+  so the engine serves the UI with no Node installed.
+- **Binance USDⓈ-M testnet** API key + secret — only for trading endpoints; market data needs none.
+  Get one at <https://testnet.binancefuture.com> (log in → API Key).
 
 ```bash
 cd engine
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e .                      # fastapi / uvicorn / pydantic-settings / ccxt / websockets
-
 cp .env.example .env                  # fill BINANCE_TESTNET_KEY / SECRET (NEVER commit .env)
 ```
 
 > The testnet keys live **only** in `engine/.env` (gitignored). Agents never see them —
 > all exchange access is inside Sunday.
 
-## 2. Build the dashboard (once, or after a UI change)
+## 2. Dashboard (pre-built — rebuild only after UI changes)
+
+The dashboard ships **committed, pre-built** at `engine/sunday/web/dist/`, so `python -m sunday`
+serves it immediately — **no Node needed to run**. Rebuild only when you change the UI:
 
 ```bash
-cd engine/sunday/web
-npm install && npm run build          # outputs engine/sunday/web/dist (served at / and /ui)
+cd engine/sunday/web && npm install && npm run build   # → web/dist (served at / and /ui)
+npm run typecheck                                       # optional: vue-tsc
 ```
-
-The engine runs without this step (it falls back to a placeholder page); build it to get the UI.
 
 ## 3. Run Sunday
 
@@ -55,11 +69,26 @@ cd engine && . .venv/bin/activate
 python -m sunday                      # serves :7777, opens sunday.db, starts the realtime hub
 ```
 
-## 4. Validate (smoke + browser)
+## 4. Configuration (`engine/.env`)
+
+All knobs live in `engine/.env` (template: `.env.example`). The ones you'll touch:
+
+| Var | Default | What |
+| --- | --- | --- |
+| `BINANCE_TESTNET_KEY` / `_SECRET` | — | testnet account creds (trading). Market data needs none. |
+| `EVVA_WEBHOOK_URL` | …`/api/swarm/sunday/event` | where `position_pnl` / `price_alert` webhooks POST |
+| `SUNDAY_HOST` / `SUNDAY_PORT` | 127.0.0.1 / 7777 | HTTP bind |
+| `SQLITE_PATH` | sunday.db | alerts + monitor config |
+| `MONITOR_ENABLED` / `MONITOR_STEP_PCT` | true / 5 | position-PnL monitor on/off + webhook % step |
+| `MONITOR_POLL_SEC` | 15 | position-book refresh / REST backstop cadence |
+| `WS_ENABLED` | true | websocket price hub (false → monitor/alerts on REST polling only) |
+| `INDICES_TTL_FAST/MACRO/FEARGREED` | 300/600/3600 | indices cache seconds |
+
+## 5. Validate (smoke + browser)
 
 ```bash
 ./scripts/run-tests.sh                # 60 unit tests, green (stdlib only)
-./scripts/smoke.sh                    # curls every /api/* group on :7777
+./scripts/smoke.sh                    # curls every /api/* group on :7777; checks the old API is 404
 ```
 
 Then open `http://127.0.0.1:7777/dashboard` and walk the pages: **Markets** (sort/filter/paginate) →
@@ -73,15 +102,44 @@ documented in `GET /manual`.
 With an evva swarm running (`evva service start` + `evva swarm .`), Sunday POSTs `position_pnl`
 (every `MONITOR_STEP_PCT`% move on an open position) and `price_alert` (when an alert fires) to
 `EVVA_WEBHOOK_URL`. To eyeball the payload without a swarm, point `EVVA_WEBHOOK_URL` at any HTTP
-echo endpoint.
+echo endpoint (e.g. a one-liner `nc -l` or webhook.site).
 
-## 5. Reset
+## 6. API surface (all token-free; `GET /manual` for full detail)
+
+| Group | Endpoints | Req |
+| --- | --- | --- |
+| markets | `GET /api/markets` · `/api/markets/{symbol}` | 0 |
+| klines  | `GET /api/klines` · `/api/klines/indicators` | 2 |
+| funding | `GET /api/funding` · `/api/funding/history` | 2 |
+| perp    | `POST /api/perp/order｜leverage｜margin-mode｜close` · `DELETE /api/perp/order/{id}｜orders` | 1 |
+| account | `GET /api/account/positions｜balance｜pnl｜orders/open｜orders｜trades` | 3 |
+| indices | `GET /api/indices` · `/api/indices/{key}` | 4 |
+| alerts  | `POST｜GET /api/alerts` · `DELETE /api/alerts/{id}` | 6 |
+| monitor | `GET /api/monitor` · `POST /api/monitor/config` | 5 |
+| system  | `GET /health` · `/manual` · `/dashboard` | — |
+
+Lists paginate with `?page=&page_size=` → `{ items, page, page_size, total, has_more }`.
+
+## 7. Troubleshooting
+
+- **`503 BINANCE_TESTNET_KEY not set`** on `/api/account/*` or `/api/perp/*` — add the testnet
+  key+secret to `engine/.env`. Market-data endpoints (`markets`/`klines`/`funding`/`indices`) don't need it.
+- **`/dashboard` shows a placeholder** — `engine/sunday/web/dist/` is missing; rebuild (§2). A fresh clone has it committed.
+- **websocket warnings in the log** — the hub auto-reconnects and the REST backstop (`MONITOR_POLL_SEC`)
+  keeps monitor/alerts working regardless; set `WS_ENABLED=false` to run poll-only.
+- **`/api/indices/*` returns `stale: true` / `available: false`** — a free upstream (Stooq/Yahoo/
+  CoinGecko) hiccuped; the last good value is served and refreshes on the next TTL window.
+- **`502 exchange error: …`** — ccxt reached Binance and it errored (rate limit / bad symbol);
+  the cause is in the message.
+- **port 7777 already in use** — set `SUNDAY_PORT` in `.env`.
+
+## 8. Reset
 
 ```bash
 rm -f engine/sunday.db                # wipe alerts + monitor config (rebuilt empty on next boot)
 ```
 
-## 6. Scope note
+## 9. Scope note
 
 milestone-6 is the pivot from the old supervised-trading engine to an **agent-native exchange
 proxy** (markets / klines+indicators / funding / perp orders / account / indices / alerts /

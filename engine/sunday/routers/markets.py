@@ -39,7 +39,7 @@ def _tickers() -> list[dict]:
 
 @router.get("")
 def list_markets(symbol: str | None = None, sort: str = "volume",
-                 order: str = "desc", page: int = 1, page_size: int = 50) -> dict:
+                 order: str = "desc", page: int = 1, page_size: int = 10) -> dict:
     """Paginated tradeable markets. `symbol` = substring filter (e.g. BTC);
     `sort` = volume|change|symbol|last; `order` = desc|asc."""
     rows = _tickers()

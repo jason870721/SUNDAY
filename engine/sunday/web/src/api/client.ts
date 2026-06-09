@@ -11,11 +11,12 @@ export interface Position {
   symbol: string; side: string; qty: number | null; entry: number | null; mark: number | null
   leverage: number | null; margin_mode: string | null; notional: number
   unrealized_pnl: number | null; roi_pct: number | null; liquidation_price: number | null
+  memo: string | null; order: Record<string, unknown> | null
 }
 export interface Order {
   id: string; symbol: string; type: string; side: string; price: number | null; amount: number | null
   filled: number | null; remaining: number | null; status: string; reduce_only: boolean
-  trigger_price: number | null; ts: number | null; client_order_id?: string
+  trigger_price: number | null; tp_sl?: string | null; ts: number | null; client_order_id?: string
 }
 export interface Trade {
   id: string; order: string; symbol: string; side: string; price: number | null; amount: number | null

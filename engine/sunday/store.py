@@ -46,6 +46,27 @@ CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
     v TEXT
 );
+
+-- Order journal (req): the agent's rationale ("memo") + the exact params for every
+-- order it places, so the position query can join it back and show the User WHY.
+CREATE TABLE IF NOT EXISTS order_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    order_id     TEXT,
+    side         TEXT,
+    type         TEXT,
+    qty          REAL,
+    notional_usd REAL,
+    price        REAL,
+    leverage     INTEGER,
+    margin_mode  TEXT,
+    reduce_only  INTEGER,        -- 0 / 1
+    take_profit  REAL,
+    stop_loss    REAL,
+    memo         VARCHAR(300)    -- length enforced at the API layer (sqlite ignores it)
+);
+CREATE INDEX IF NOT EXISTS idx_order_log_symbol ON order_log (symbol, id DESC);
 """
 
 
@@ -148,3 +169,36 @@ def kv_set(k: str, v: str) -> None:
             (k, v),
         )
         _db().commit()
+
+
+# --------------------------------------------------------------------------
+# Order journal — agent rationale + params per order (req)
+# --------------------------------------------------------------------------
+
+def record_order(symbol: str, order_id: str | None, memo: str | None, order: dict) -> None:
+    """Log an order's params (one column each) + the agent's memo (req)."""
+    with _LOCK:
+        _db().execute(
+            "INSERT INTO order_log (ts, symbol, order_id, side, type, qty, notional_usd, price, "
+            "leverage, margin_mode, reduce_only, take_profit, stop_loss, memo) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (_now(), symbol, str(order_id) if order_id is not None else None,
+             order.get("side"), order.get("type"), order.get("qty"), order.get("notional_usd"),
+             order.get("price"), order.get("leverage"), order.get("margin_mode"),
+             1 if order.get("reduce_only") else 0, order.get("take_profit"), order.get("stop_loss"),
+             memo),
+        )
+        _db().commit()
+
+
+def latest_order(symbol: str) -> dict | None:
+    """The most recent logged order for a symbol (memo + params) — what the position
+    query joins to surface the agent's rationale to the User."""
+    with _LOCK:
+        row = _db().execute(
+            "SELECT * FROM order_log WHERE symbol = ? ORDER BY id DESC LIMIT 1", (symbol,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["reduce_only"] = bool(d.get("reduce_only"))
+    return d

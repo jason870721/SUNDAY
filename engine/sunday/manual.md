@@ -38,9 +38,11 @@ curl -s "http://127.0.0.1:7777/api/funding/history?symbol=BTCUSDT&page=1"
 
 ```bash
 # 市價買進 / 開多，用 USD 名目金額、5× 槓桿、逐倉，附止盈止損（reduce-only trigger legs）
+# memo = 你下這一單的理由（≤300 字），會記入帳本並在 /api/account/positions 回顯給 User。
 curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application/json' -d '{
   "symbol":"BTCUSDT","side":"buy","type":"market","notional_usd":200,
-  "leverage":5,"margin_mode":"isolated","take_profit":75000,"stop_loss":60000 }'
+  "leverage":5,"margin_mode":"isolated","take_profit":75000,"stop_loss":60000,
+  "memo":"4h 突破壓力 + 資金費轉負，順勢做多" }'
 
 # 限價單（用 qty 指定張數）：
 #   {"symbol":"ETHUSDT","side":"sell","type":"limit","qty":0.1,"price":4200}
@@ -52,7 +54,8 @@ curl -sX DELETE "http://127.0.0.1:7777/api/perp/orders?symbol=BTCUSDT"          
 ```
 
 下單參數：`side` buy|sell · `type` market|limit · 大小用 `qty`（張數）或 `notional_usd`（USD，自動換算）·
-`leverage` / `margin_mode`(isolated 逐倉 | cross 全倉) 在進場前套用 · `take_profit`/`stop_loss` 為觸發價。
+`leverage` / `margin_mode`(isolated 逐倉 | cross 全倉) 在進場前套用 · `take_profit`/`stop_loss` 為觸發價 ·
+`memo`（≤300 字）= 下單理由，記入帳本、在倉位查詢的 `memo` / `order` 欄回顯給 User。
 
 ## 3 · 帳戶：倉位 / 損益 / 訂單 `/api/account`（測試網）
 

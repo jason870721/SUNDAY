@@ -9,6 +9,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "ccxt>=4.3",
     "websockets>=12.0",
+    "certifi>=2024.2.2",          # CA bundle for the indices HTTPS feeds (urllib)
 ]
 # No Postgres/Redis: the only durable state is the alerts table in a single sqlite
 # file (stdlib sqlite3). ccxt drives both the mainnet market-data instance and the

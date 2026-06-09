@@ -95,20 +95,20 @@ class Monitor:
         closed symbols are dropped. When not seeding, evaluate at the fresh marks so a
         crossing is caught even with the websocket off."""
         from . import exchange
-        positions = exchange.fetch_positions()
+        positions = exchange.fetch_positions()  # raw positionRisk rows
         seen: set[str] = set()
         with self._lock:
             for p in positions:
-                contracts = _f(p.get("contracts")) or 0.0
-                if not contracts:
+                amt = _f(p.get("positionAmt")) or 0.0   # signed: + long, − short
+                if not amt:
                     continue
-                sym = (p.get("info") or {}).get("symbol") or p.get("symbol")
-                side = p.get("side")
+                sym = p.get("symbol")                   # "BTCUSDT" — matches the ws stream symbol
                 entry, mark = _f(p.get("entryPrice")), _f(p.get("markPrice"))
-                margin = _f(p.get("initialMargin")) or _f(p.get("collateral"))
-                self.book[sym] = {"side": side, "entry": entry,
-                                  "qty": contracts if side == "long" else -contracts,
-                                  "margin": margin, "mark": mark}
+                lev = _f(p.get("leverage"))
+                notional = abs(amt) * (mark or 0.0)
+                margin = (notional / lev) if (lev and notional) else None
+                self.book[sym] = {"side": "long" if amt > 0 else "short", "entry": entry,
+                                  "qty": amt, "margin": margin, "mark": mark}
                 seen.add(sym)
                 if sym not in self.buckets:
                     roi, _ = derived_roi(entry, self.book[sym]["qty"], margin, mark)

@@ -35,9 +35,6 @@ class Settings(BaseSettings):
     # Alerts (req 6) persist here; monitor baselines stay in-memory (rebuilt on boot).
     sqlite_path: str = "sunday.db"
 
-    # Default market for endpoints whose `symbol` query param is optional.
-    default_symbol: str = "BTCUSDT"
-
     # --- position monitor (req 5) ----------------------------------------
     # Webhook the swarm every `monitor_step_pct` move in an open position's ROI%.
     monitor_enabled: bool = True

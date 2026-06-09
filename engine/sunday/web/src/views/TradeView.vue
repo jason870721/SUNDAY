@@ -19,6 +19,7 @@ const form = reactive({
   margin_mode: 'cross' as 'cross' | 'isolated',
   take_profit: null as number | null,
   stop_loss: null as number | null,
+  memo: '' as string,
 })
 const last = ref<number | null>(null)
 const busy = ref(false)
@@ -35,6 +36,7 @@ async function submit(): Promise<void> {
     symbol: form.symbol, side: form.side, type: form.type,
     leverage: form.leverage || undefined, margin_mode: form.margin_mode,
     take_profit: form.take_profit || undefined, stop_loss: form.stop_loss || undefined,
+    memo: form.memo || undefined,
   }
   if (form.sizeMode === 'qty') body.qty = form.qty
   else body.notional_usd = form.notional_usd
@@ -92,6 +94,9 @@ onMounted(loadPrice)
           <label class="field"><span>Take profit</span><input v-model.number="form.take_profit" type="number" placeholder="trigger" /></label>
           <label class="field"><span>Stop loss</span><input v-model.number="form.stop_loss" type="number" placeholder="trigger" /></label>
         </div>
+
+        <label class="field"><span>Memo · why this trade ({{ form.memo.length }}/300, shown to User)</span>
+          <textarea v-model="form.memo" rows="2" maxlength="300" placeholder="rationale the agent logs for this order…"></textarea></label>
 
         <button class="btn" :class="form.side === 'buy' ? 'buy' : 'sell'" style="width: 100%; margin-top: 6px"
           :disabled="busy" @click="submit">

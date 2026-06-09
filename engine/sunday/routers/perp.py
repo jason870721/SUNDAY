@@ -10,9 +10,9 @@ exchange uses for native brackets.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .. import exchange
+from .. import exchange, store
 from ..apiutil import ex_call, require_trade_key, to_float
 
 router = APIRouter(prefix="/api/perp", tags=["perp"])
@@ -30,6 +30,7 @@ class OrderReq(BaseModel):
     reduce_only: bool = False
     take_profit: float | None = None       # trigger price → reduce-only TP leg
     stop_loss: float | None = None         # trigger price → reduce-only SL leg
+    memo: str | None = Field(default=None, max_length=300)  # agent's rationale; shown to the User
 
 
 class LeverageReq(BaseModel):
@@ -56,14 +57,21 @@ def _norm_order(o: dict) -> dict:
     }
 
 
-def _set_margin_mode_safe(symbol: str, mode: str) -> None:
-    """Binance throws if the margin mode is already what you ask for — that's a no-op,
-    not an error, so swallow exactly that case and let real failures surface."""
+def _set_margin_mode_safe(symbol: str, mode: str) -> str:
+    """Set margin mode, tolerating Binance's two benign rejections and reporting which:
+      'set'       — changed;
+      'unchanged' — already that mode (-4046 'No need to change margin type');
+      'blocked'   — can't change while a position / open orders exist (-4047).
+    Only genuinely unexpected errors raise. Callers decide whether 'blocked' is fatal."""
     try:
         exchange.set_margin_mode(symbol, mode)
+        return "set"
     except Exception as e:
-        if "no need to change" in str(e).lower() or "-4046" in str(e):
-            return
+        s = str(e).lower()
+        if "-4046" in s or "no need to change" in s:
+            return "unchanged"
+        if "-4047" in s or "cannot be changed if there exists" in s:
+            return "blocked"
         raise HTTPException(502, f"set_margin_mode failed: {type(e).__name__}: {str(e)[:200]}")
 
 
@@ -77,6 +85,23 @@ def _resolve_qty(req: OrderReq) -> float:
             raise HTTPException(502, "could not resolve a price to size notional_usd")
         return ex_call(lambda: exchange.amount_to_precision(req.symbol, req.notional_usd / price))
     raise HTTPException(400, "provide qty (contracts) or notional_usd")
+
+
+def _place_entry(req: "OrderReq", qty: float, params: dict) -> dict:
+    """Place the entry order; turn Binance's PERCENT_PRICE rejection (-4016/-4017) into a
+    clear 400 explaining the limit must sit within the symbol's % band of the mark."""
+    try:
+        return exchange.create_order(req.symbol, req.type, req.side, qty, req.price, params)
+    except HTTPException:
+        raise
+    except Exception as e:
+        msg = str(e)
+        if any(t in msg for t in ("-4016", "-4017", "PERCENT_PRICE", "Limit price can")):
+            raise HTTPException(400,
+                f"limit price rejected by Binance's PERCENT_PRICE filter: {msg[:140]}. "
+                "A limit price must stay within the symbol's allowed % band around the mark — "
+                "move it closer to the current price, or use type=market.")
+        raise HTTPException(502, f"exchange error: {type(e).__name__}: {msg[:300]}")
 
 
 @router.post("/order")
@@ -95,16 +120,17 @@ def place_order(req: OrderReq) -> dict:
     if req.margin_mode:
         if req.margin_mode not in ("isolated", "cross"):
             raise HTTPException(400, "margin_mode must be 'isolated' or 'cross'")
-        _set_margin_mode_safe(req.symbol, req.margin_mode)
+        result = _set_margin_mode_safe(req.symbol, req.margin_mode)
         applied["margin_mode"] = req.margin_mode
+        if result == "blocked":  # a position/open orders exist → keep current mode, still place the order
+            applied["margin_mode_note"] = "unchanged: a position or open orders already exist on this symbol (Binance -4047)"
     if req.leverage:
         ex_call(lambda: exchange.set_leverage(req.symbol, req.leverage))
         applied["leverage"] = req.leverage
 
     qty = _resolve_qty(req)
     params = {"reduceOnly": True} if req.reduce_only else {}
-    entry = ex_call(lambda: exchange.create_order(
-        req.symbol, req.type, req.side, qty, req.price, params))
+    entry = _place_entry(req, qty, params)
 
     # Attach reduce-only TP/SL legs (only meaningful for an opening order).
     legs: dict = {}
@@ -117,7 +143,16 @@ def place_order(req: OrderReq) -> dict:
             legs["stop_loss"] = _norm_order(ex_call(lambda: exchange.place_stop(
                 req.symbol, close_side, qty, req.stop_loss, take_profit=False)))
 
-    return {"ok": True, "applied": applied, "order": _norm_order(entry), **legs}
+    # Journal the decision: params (one column each) + the agent's memo. Joined into
+    # /api/account/positions so the User sees WHY this position was opened.
+    store.record_order(req.symbol.upper(), entry.get("id"), req.memo, {
+        "side": req.side, "type": req.type, "qty": qty,
+        "notional_usd": req.notional_usd, "price": req.price,
+        "leverage": req.leverage, "margin_mode": req.margin_mode, "reduce_only": req.reduce_only,
+        "take_profit": req.take_profit, "stop_loss": req.stop_loss,
+    })
+
+    return {"ok": True, "applied": applied, "order": _norm_order(entry), "memo": req.memo, **legs}
 
 
 @router.post("/leverage")
@@ -134,8 +169,10 @@ def set_margin_mode(req: MarginModeReq) -> dict:
     require_trade_key()
     if req.mode not in ("isolated", "cross"):
         raise HTTPException(400, "mode must be 'isolated' or 'cross'")
-    _set_margin_mode_safe(req.symbol, req.mode)
-    return {"ok": True, "symbol": req.symbol.upper(), "margin_mode": req.mode}
+    result = _set_margin_mode_safe(req.symbol, req.mode)
+    if result == "blocked":
+        raise HTTPException(409, f"cannot change margin mode for {req.symbol.upper()} while a position or open orders exist")
+    return {"ok": True, "symbol": req.symbol.upper(), "margin_mode": req.mode, "result": result}
 
 
 @router.post("/close")

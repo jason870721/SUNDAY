@@ -49,6 +49,25 @@ class TestStore(unittest.TestCase):
         # while still holding it — a plain Lock would deadlock here.
         self.assertIsNotNone(store.create_alert("A", "price_above", 1, None, None))
 
+    def test_order_journal_roundtrip(self):
+        store.record_order("BTCUSDT", "999", "broke 4h resistance; trend-long", {
+            "side": "buy", "type": "market", "qty": 0.01, "notional_usd": 200, "price": None,
+            "leverage": 5, "margin_mode": "isolated", "reduce_only": False,
+            "take_profit": 75000, "stop_loss": 60000,
+        })
+        o = store.latest_order("BTCUSDT")
+        self.assertEqual(o["memo"], "broke 4h resistance; trend-long")
+        self.assertEqual(o["order_id"], "999")
+        self.assertEqual(o["leverage"], 5)
+        self.assertEqual(o["take_profit"], 75000)
+        self.assertIs(o["reduce_only"], False)         # stored 0/1 → coerced back to bool
+        self.assertIsNone(store.latest_order("ETHUSDT"))
+
+    def test_order_journal_latest_wins(self):
+        store.record_order("X", "1", "first", {"side": "buy"})
+        store.record_order("X", "2", "second", {"side": "sell"})
+        self.assertEqual(store.latest_order("X")["memo"], "second")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -64,7 +64,7 @@ onUnmounted(() => clearInterval(timer))
     <div style="overflow: auto">
       <!-- positions -->
       <table v-if="tab === 'positions'" class="tbl">
-        <thead><tr><th class="left">Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Lev</th><th>uPnL</th><th>ROI%</th><th>Liq</th><th></th></tr></thead>
+        <thead><tr><th class="left">Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Lev</th><th>uPnL</th><th>ROI%</th><th>Liq</th><th class="left">Memo</th><th></th></tr></thead>
         <tbody>
           <tr v-for="p in positions" :key="p.symbol">
             <td class="left"><b>{{ p.symbol }}</b></td>
@@ -74,9 +74,11 @@ onUnmounted(() => clearInterval(timer))
             <td :class="sign(p.unrealized_pnl)">{{ usd(p.unrealized_pnl) }}</td>
             <td :class="sign(p.roi_pct)">{{ pct(p.roi_pct) }}</td>
             <td class="faint">{{ price(p.liquidation_price) }}</td>
+            <td class="left muted" :title="p.memo || ''"
+              style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.memo || '—' }}</td>
             <td><button class="btn sm ghost" @click="closePos(p.symbol)">close</button></td>
           </tr>
-          <tr v-if="positions.length === 0"><td colspan="10" class="empty">no open positions</td></tr>
+          <tr v-if="positions.length === 0"><td colspan="11" class="empty">no open positions</td></tr>
         </tbody>
       </table>
 

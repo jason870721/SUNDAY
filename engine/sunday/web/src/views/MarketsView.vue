@@ -26,7 +26,7 @@ const COLS: Array<{ key: string; label: string; sort?: string }> = [
 
 async function load(): Promise<void> {
   loading.value = true
-  const r = await attempt(() => api.markets({ symbol: symbol.value, sort: sort.value, order: order.value, page: page.value, page_size: 25 }))
+  const r = await attempt(() => api.markets({ symbol: symbol.value, sort: sort.value, order: order.value, page: page.value, page_size: 10 }))
   if (r) data.value = r
   loading.value = false
 }

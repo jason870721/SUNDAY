@@ -14,6 +14,15 @@ to ccxt; the HTTP layer wraps these in a clean-502 helper.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import ssl
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
 import ccxt
 
 from .config import settings
@@ -41,7 +50,11 @@ def trade_ex() -> ccxt.binanceusdm:
             "apiKey": settings.binance_testnet_key or None,
             "secret": settings.binance_testnet_secret or None,
             "enableRateLimit": True,
-            "options": {"defaultType": "future", "disableFuturesSandboxWarning": True},
+            # warnOnFetchOpenOrdersWithoutSymbol: ack ccxt's rate-limit warning so
+            # GET /api/account/orders/open (no symbol) returns instead of raising.
+            # (enableRateLimit already throttles; the symbol-less call just costs more weight.)
+            "options": {"defaultType": "future", "disableFuturesSandboxWarning": True,
+                        "warnOnFetchOpenOrdersWithoutSymbol": False},
         })
         ex.set_sandbox_mode(True)
         _trade = ex
@@ -180,31 +193,90 @@ def supported_timeframes() -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# Account + orders (testnet)
+# Account + orders (testnet) — direct signed REST
+#
+# ccxt's binanceusdm position parse drops `leverage` (and is lossy elsewhere), so the
+# account READS go straight to Binance's fapi and return the RAW exchange shapes — full
+# control over every field (leverage / liquidationPrice / marginType / stopPrice …).
+# Order WRITES stay on ccxt below (precision helpers + the tested create_order path).
+# HMAC-signed, stdlib only; TLS via certifi (some Python installs lack a usable system
+# CA store → CERTIFICATE_VERIFY_FAILED).
 # --------------------------------------------------------------------------
 
-def fetch_balance() -> dict:
-    return trade_ex().fetch_balance()
+_TESTNET = "https://testnet.binancefuture.com"
+
+
+def _ssl_ctx() -> ssl.SSLContext:
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+_SSL = _ssl_ctx()
+_clock = {"offset": None, "at": 0.0}
+
+
+def _server_ms() -> int:
+    """Binance time, offset-corrected (avoids -1021 on clock skew); offset cached 5 min."""
+    now = time.time()
+    if _clock["offset"] is None or now - _clock["at"] > 300:
+        with urllib.request.urlopen(_TESTNET + "/fapi/v1/time", timeout=10, context=_SSL) as r:
+            srv = json.loads(r.read())["serverTime"]
+        _clock["offset"] = srv - int(now * 1000)
+        _clock["at"] = now
+    return int(time.time() * 1000) + int(_clock["offset"])
+
+
+def _signed(path: str, params: dict | None = None):
+    """Signed GET to the testnet fapi. Raises with Binance's error body on failure."""
+    p = {k: v for k, v in (params or {}).items() if v is not None}
+    p["timestamp"] = _server_ms()
+    p["recvWindow"] = 5000
+    qs = urllib.parse.urlencode(p)
+    sig = hmac.new(settings.binance_testnet_secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
+    req = urllib.request.Request(f"{_TESTNET}{path}?{qs}&signature={sig}",
+                                 headers={"X-MBX-APIKEY": settings.binance_testnet_key})
+    try:
+        with urllib.request.urlopen(req, timeout=12, context=_SSL) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:  # surface Binance's {code,msg}, not a bare 500
+        raise RuntimeError(f"binance {e.code}: {e.read().decode('utf-8', 'ignore')[:200]}")
 
 
 def fetch_positions() -> list[dict]:
-    """Open positions only (non-zero contracts)."""
-    return [p for p in trade_ex().fetch_positions() if p.get("contracts")]
+    """Open positions — raw positionRisk rows (leverage + liquidationPrice included)."""
+    return [p for p in _signed("/fapi/v2/positionRisk") if _f(p.get("positionAmt"))]
+
+
+def leverage_by_symbol() -> dict[str, int]:
+    """symbol id -> configured leverage, from positionRisk (annotates open orders)."""
+    out: dict[str, int] = {}
+    for p in _signed("/fapi/v2/positionRisk"):
+        lev = _f(p.get("leverage"))
+        if lev:
+            out[p["symbol"]] = int(lev)
+    return out
 
 
 def fetch_open_orders(symbol: str | None = None) -> list[dict]:
-    ex = trade_ex()
-    return ex.fetch_open_orders(unify_trade(symbol)) if symbol else ex.fetch_open_orders()
+    return _signed("/fapi/v1/openOrders", {"symbol": symbol.upper()} if symbol else None)
 
 
 def fetch_orders(symbol: str, since: int | None = None, limit: int = 100) -> list[dict]:
     """Order history (Binance fapi requires a symbol)."""
-    return trade_ex().fetch_orders(unify_trade(symbol), since=since, limit=limit)
+    return _signed("/fapi/v1/allOrders", {"symbol": symbol.upper(), "startTime": since, "limit": min(limit, 1000)})
 
 
 def fetch_my_trades(symbol: str, since: int | None = None, limit: int = 100) -> list[dict]:
     """Fill history (Binance fapi requires a symbol)."""
-    return trade_ex().fetch_my_trades(unify_trade(symbol), since=since, limit=limit)
+    return _signed("/fapi/v1/userTrades", {"symbol": symbol.upper(), "startTime": since, "limit": min(limit, 1000)})
+
+
+def fetch_account() -> dict:
+    """Raw /fapi/v2/account — wallet / margin balances + totals."""
+    return _signed("/fapi/v2/account")
 
 
 def amount_to_precision(symbol: str, amount: float) -> float:
@@ -251,11 +323,13 @@ def cancel_all_orders(symbol: str) -> None:
 
 
 def close_position(symbol: str) -> dict | None:
-    """Flatten one symbol with a reduce-only market order. None if no open position."""
-    target = unify_trade(symbol)
+    """Flatten one symbol with a reduce-only market order. None if no open position.
+
+    Reads the raw positionRisk shape (positionAmt: signed string); writes via ccxt."""
+    sym = symbol.upper()
     for p in fetch_positions():
-        if p["symbol"] == target and p.get("contracts"):
-            close_side = "sell" if p["side"] == "long" else "buy"
-            return create_order(symbol, "market", close_side, p["contracts"],
-                                params={"reduceOnly": True})
+        amt = _f(p.get("positionAmt"))
+        if p.get("symbol") == sym and amt:
+            close_side = "sell" if amt > 0 else "buy"
+            return create_order(symbol, "market", close_side, abs(amt), params={"reduceOnly": True})
     return None

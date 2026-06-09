@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import ssl
 import time
 import urllib.request
 
@@ -111,15 +112,30 @@ def parse_yahoo_chart(payload: dict) -> dict | None:
 # Network + cache
 # --------------------------------------------------------------------------
 
+def _ssl_context() -> ssl.SSLContext:
+    """A verified TLS context. urllib's default trusts the system CA store, which is
+    missing/stale in some Python installs (→ CERTIFICATE_VERIFY_FAILED on every feed).
+    Prefer certifi's bundle (already present — it's what ccxt's HTTP stack uses); fall
+    back to the platform default if certifi is somehow absent."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+_SSL = _ssl_context()
+
+
 def _get_json(url: str, timeout: float = 6.0) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "sunday/0.6"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=_SSL) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
 def _get_text(url: str, timeout: float = 6.0) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "sunday/0.6"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=_SSL) as r:
         return r.read().decode("utf-8")
 
 
