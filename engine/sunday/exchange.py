@@ -53,8 +53,13 @@ def trade_ex() -> ccxt.binanceusdm:
             # warnOnFetchOpenOrdersWithoutSymbol: ack ccxt's rate-limit warning so
             # GET /api/account/orders/open (no symbol) returns instead of raising.
             # (enableRateLimit already throttles; the symbol-less call just costs more weight.)
+            # adjustForTimeDifference: ccxt signs with its own millisecond nonce and does NOT
+            # correct clock skew by default → a fast local clock trips Binance -1021 on every
+            # signed write (orders/leverage/margin). Turn it on so ccxt syncs to server time,
+            # and widen recvWindow to match the raw _signed path below.
             "options": {"defaultType": "future", "disableFuturesSandboxWarning": True,
-                        "warnOnFetchOpenOrdersWithoutSymbol": False},
+                        "warnOnFetchOpenOrdersWithoutSymbol": False,
+                        "adjustForTimeDifference": True, "recvWindow": _RECV_WINDOW},
         })
         ex.set_sandbox_mode(True)
         _trade = ex
@@ -215,25 +220,49 @@ def _ssl_ctx() -> ssl.SSLContext:
 
 
 _SSL = _ssl_ctx()
-_clock = {"offset": None, "at": 0.0}
+
+# Binance's timestamp rule is ASYMMETRIC: a request's `timestamp` may be at most 1000ms
+# AHEAD of server time, but up to `recvWindow` BEHIND it. So we (a) estimate the clock
+# offset with a round-trip midpoint (kills most of the network-latency bias that, through
+# a slow proxy, pushes the estimate >1000ms ahead and trips -1021 every poll), and (b)
+# deliberately aim the timestamp slightly BEHIND server time — being behind is the safe
+# side. recvWindow is widened to give that behind-bias room.
+_RECV_WINDOW = 10000
+_TS_SAFETY_MS = 1000              # bias the request timestamp this far behind server time
+_CLOCK_TTL = 300.0               # re-sync the offset at most this often (seconds)
+_clock = {"offset": 0.0, "at": 0.0, "synced": False}
+
+
+def _sync_clock() -> None:
+    """Re-measure the Binance↔local offset via a round-trip midpoint (removes ~half the
+    one-way latency bias of a naive serverTime − localBefore)."""
+    before = time.time()
+    with urllib.request.urlopen(_TESTNET + "/fapi/v1/time", timeout=10, context=_SSL) as r:
+        srv = json.loads(r.read())["serverTime"]
+    after = time.time()
+    _clock["offset"] = srv - (before + after) / 2.0 * 1000.0
+    _clock["at"] = after
+    _clock["synced"] = True
 
 
 def _server_ms() -> int:
-    """Binance time, offset-corrected (avoids -1021 on clock skew); offset cached 5 min."""
+    """Server-aligned ms for signing, biased to sit just BEHIND server time so a fast local
+    clock can't trip -1021. Offset is cached `_CLOCK_TTL`; a sync failure degrades to the
+    last offset rather than crashing the poll loop."""
     now = time.time()
-    if _clock["offset"] is None or now - _clock["at"] > 300:
-        with urllib.request.urlopen(_TESTNET + "/fapi/v1/time", timeout=10, context=_SSL) as r:
-            srv = json.loads(r.read())["serverTime"]
-        _clock["offset"] = srv - int(now * 1000)
-        _clock["at"] = now
-    return int(time.time() * 1000) + int(_clock["offset"])
+    if not _clock["synced"] or now - _clock["at"] > _CLOCK_TTL:
+        try:
+            _sync_clock()
+        except Exception:
+            pass  # keep serving on the previous offset; a -1021 below forces a retry-resync
+    return int(time.time() * 1000.0 + _clock["offset"]) - _TS_SAFETY_MS
 
 
-def _signed(path: str, params: dict | None = None):
-    """Signed GET to the testnet fapi. Raises with Binance's error body on failure."""
+def _signed_request(path: str, params: dict | None = None):
+    """One signed GET to the testnet fapi. Raises with Binance's {code,msg} on failure."""
     p = {k: v for k, v in (params or {}).items() if v is not None}
     p["timestamp"] = _server_ms()
-    p["recvWindow"] = 5000
+    p["recvWindow"] = _RECV_WINDOW
     qs = urllib.parse.urlencode(p)
     sig = hmac.new(settings.binance_testnet_secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
     req = urllib.request.Request(f"{_TESTNET}{path}?{qs}&signature={sig}",
@@ -243,6 +272,18 @@ def _signed(path: str, params: dict | None = None):
             return json.loads(r.read())
     except urllib.error.HTTPError as e:  # surface Binance's {code,msg}, not a bare 500
         raise RuntimeError(f"binance {e.code}: {e.read().decode('utf-8', 'ignore')[:200]}")
+
+
+def _signed(path: str, params: dict | None = None):
+    """Signed GET with one self-healing retry: a -1021 (timestamp out of window) forces a
+    fresh clock sync and a single re-sign, so transient drift recovers on its own."""
+    try:
+        return _signed_request(path, params)
+    except RuntimeError as e:
+        if "-1021" not in str(e):
+            raise
+        _clock["synced"] = False     # force _server_ms() to re-sync before the retry
+        return _signed_request(path, params)
 
 
 def fetch_positions() -> list[dict]:

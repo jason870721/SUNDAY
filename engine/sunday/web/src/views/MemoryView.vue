@@ -26,23 +26,25 @@ onMounted(loadIndex)
 </script>
 
 <template>
-  <div class="grid" style="grid-template-columns: 300px 1fr; align-items: start">
+  <div class="split" style="--aside: 300px">
     <!-- agent list -->
     <div class="panel">
       <div class="panel-head"><h2>Agents</h2><div class="grow"></div>
         <button class="btn sm ghost" @click="loadIndex" title="refresh">↻</button></div>
-      <table class="tbl">
-        <thead><tr><th class="left">Agent</th><th>Updated</th></tr></thead>
-        <tbody>
-          <tr v-for="a in agents" :key="a.agent" class="clickable" @click="select(a.agent)"
-            :style="selected === a.agent ? 'background: var(--panel-3)' : ''">
-            <td class="left"><b>{{ a.agent }}</b></td>
-            <td class="faint" :title="a.updated_at ? time(Date.parse(a.updated_at)) : 'no memory yet'">
-              {{ a.updated_at ? ago(Date.parse(a.updated_at)) : '—' }}</td>
-          </tr>
-          <tr v-if="agents.length === 0"><td colspan="2" class="empty">no agents</td></tr>
-        </tbody>
-      </table>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th class="left">Agent</th><th>Updated</th></tr></thead>
+          <tbody>
+            <tr v-for="a in agents" :key="a.agent" class="clickable" @click="select(a.agent)"
+              :style="selected === a.agent ? 'background: var(--gold-tint)' : ''">
+              <td class="left"><b>{{ a.agent }}</b></td>
+              <td class="faint" :title="a.updated_at ? time(Date.parse(a.updated_at)) : 'no memory yet'">
+                {{ a.updated_at ? ago(Date.parse(a.updated_at)) : '—' }}</td>
+            </tr>
+            <tr v-if="agents.length === 0"><td colspan="2" class="empty">no agents</td></tr>
+          </tbody>
+        </table>
+      </div>
       <div class="panel-pad faint" style="font-size: 11px; border-top: 1px solid var(--border-soft)">
         每個 agent 的長期記憶（取代 MEMORY.md / RESEARCH.md）。醒來時讀、收工時寫回。
       </div>

@@ -50,15 +50,15 @@ onMounted(loadPrice)
 </script>
 
 <template>
-  <div class="grid" style="grid-template-columns: 420px 1fr; align-items: start">
+  <div class="split" style="--aside: 420px">
     <div class="panel">
       <div class="panel-head"><h2>Order Ticket</h2><span class="tag" :class="'isolated'">testnet</span></div>
       <div class="panel-pad">
         <div class="seg" style="width: 100%; margin-bottom: 14px">
           <button style="flex:1" class="buy" :class="{ on: form.side === 'buy' }" @click="form.side = 'buy'"
-            :style="form.side === 'buy' ? 'background:rgba(63,185,80,.18);color:#3fb950' : ''">Buy / Long</button>
+            :style="form.side === 'buy' ? 'background:rgba(58,208,127,.18);color:var(--up)' : ''">Buy / Long</button>
           <button style="flex:1" :class="{ on: form.side === 'sell' }" @click="form.side = 'sell'"
-            :style="form.side === 'sell' ? 'background:rgba(248,81,73,.18);color:#f85149' : ''">Sell / Short</button>
+            :style="form.side === 'sell' ? 'background:rgba(242,85,85,.18);color:var(--down)' : ''">Sell / Short</button>
         </div>
 
         <label class="field"><span>Symbol</span>

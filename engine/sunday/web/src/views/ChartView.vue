@@ -46,15 +46,15 @@ watch(interval, reload)
 onMounted(() => {
   chart = createChart(chartEl.value!, {
     autoSize: true,
-    layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#8a93a6', fontFamily: 'monospace' },
-    grid: { vertLines: { color: '#161a23' }, horzLines: { color: '#161a23' } },
-    timeScale: { borderColor: '#232a36', timeVisible: true },
-    rightPriceScale: { borderColor: '#232a36' },
+    layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#9b948a', fontFamily: 'monospace' },
+    grid: { vertLines: { color: '#16161b' }, horzLines: { color: '#16161b' } },
+    timeScale: { borderColor: '#2a2a31', timeVisible: true },
+    rightPriceScale: { borderColor: '#2a2a31' },
     crosshair: { mode: 0 },
   })
   candle = chart.addCandlestickSeries({
-    upColor: '#3fb950', downColor: '#f85149', borderVisible: false,
-    wickUpColor: '#3fb950', wickDownColor: '#f85149',
+    upColor: '#3ad07f', downColor: '#f25555', borderVisible: false,
+    wickUpColor: '#3ad07f', wickDownColor: '#f25555',
   })
   reload()
 })
@@ -62,7 +62,7 @@ onUnmounted(() => chart?.remove())
 </script>
 
 <template>
-  <div class="grid" style="grid-template-columns: 1fr 280px">
+  <div class="split-r" style="--aside: 280px">
     <div class="panel">
       <div class="panel-head">
         <input v-model="symbol" @keyup.enter="setSymbol" style="width: 140px; font-weight: 600"

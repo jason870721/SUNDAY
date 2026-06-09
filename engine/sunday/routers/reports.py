@@ -9,10 +9,10 @@ Token-free like the rest of the proxy.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import store
+from .. import store, telegram
 from ..pagination import paginate
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -27,14 +27,18 @@ class ReportReq(BaseModel):
 
 
 @router.post("")
-def create_report(req: ReportReq) -> dict:
-    """Post a report. `kind` outside the known set is stored as 'info'."""
+def create_report(req: ReportReq, background: BackgroundTasks) -> dict:
+    """Post a report. `kind` outside the known set is stored as 'info'. If Telegram is
+    configured, the User also gets a push (fired after the response — never blocks it)."""
     body = req.body.strip()
     title = req.title.strip()
     if not body or not title:
         raise HTTPException(400, "title and body are required")
     kind = req.kind if req.kind in KINDS else "info"
-    return store.add_report(title, body, kind)
+    row = store.add_report(title, body, kind)
+    if telegram.enabled():
+        background.add_task(telegram.send, telegram.report_text(title, body, kind))
+    return row
 
 
 @router.get("")

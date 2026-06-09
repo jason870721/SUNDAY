@@ -20,10 +20,12 @@ KINDS = ("price_above", "price_below", "pct_move")
 
 
 def _default_alert_notify(alert: dict, price: float) -> None:
-    """Production notifier: POST the price-alert event to the evva swarm webhook."""
-    from . import events
+    """Production notifier: POST the price-alert event to the evva swarm webhook, and (if
+    configured) push it to the User's Telegram. Both sinks are fire-and-forget — never raise."""
+    from . import events, telegram
     from .config import settings
     events.post(settings.evva_webhook_url, events.price_alert_event(alert, price))
+    telegram.send(telegram.alert_text(alert, price))
 
 
 def should_fire(kind: str, threshold: float, ref_price: float | None, price: float | None) -> bool:

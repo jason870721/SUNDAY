@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     # POST {title, body, data, to}; deliberately token-free on the swarm side.
     evva_webhook_url: str = "http://127.0.0.1:8888/api/swarm/sunday/event"
 
+    # --- Telegram notifications (milestone-8, User-facing) ----------------
+    # A SECOND outbound channel (the evva webhook above is agent-facing): reports / price
+    # alerts / position PnL push to the User's phone. Both blank → disabled, Sunday behaves
+    # exactly as before. Keys stay engine-side — never exposed to agents (invariant 2).
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     # --- http server ------------------------------------------------------
     sunday_host: str = "127.0.0.1"
     sunday_port: int = 7777

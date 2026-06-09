@@ -23,24 +23,26 @@ onMounted(() => load())
 </script>
 
 <template>
-  <div class="grid" style="grid-template-columns: 340px 1fr; align-items: start">
+  <div class="split" style="--aside: 340px">
     <!-- report list (newest first) -->
     <div class="panel">
       <div class="panel-head"><h2>Reports</h2><div class="grow"></div>
         <button class="btn sm ghost" @click="load(list?.page ?? 1)" title="refresh">↻</button></div>
-      <table class="tbl">
-        <thead><tr><th class="left">Date</th><th class="left">Title</th><th>Kind</th></tr></thead>
-        <tbody>
-          <tr v-for="r in list?.items ?? []" :key="r.id" class="clickable" @click="selected = r"
-            :style="selected?.id === r.id ? 'background: var(--panel-3)' : ''">
-            <td class="left faint">{{ time(Date.parse(r.ts)) }}</td>
-            <td class="left">{{ r.title || '(untitled)' }}</td>
-            <td><span class="tag" :class="kindClass(r.kind)">{{ r.kind }}</span></td>
-          </tr>
-          <tr v-if="(list?.items.length ?? 0) === 0">
-            <td colspan="3" class="empty">還沒有通報 — friday 遇到大賺 / 大賠 / 系統錯誤時會在這裡通報你</td></tr>
-        </tbody>
-      </table>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th class="left">Date</th><th class="left">Title</th><th>Kind</th></tr></thead>
+          <tbody>
+            <tr v-for="r in list?.items ?? []" :key="r.id" class="clickable" @click="selected = r"
+              :style="selected?.id === r.id ? 'background: var(--gold-tint)' : ''">
+              <td class="left faint">{{ time(Date.parse(r.ts)) }}</td>
+              <td class="left">{{ r.title || '(untitled)' }}</td>
+              <td><span class="tag" :class="kindClass(r.kind)">{{ r.kind }}</span></td>
+            </tr>
+            <tr v-if="(list?.items.length ?? 0) === 0">
+              <td colspan="3" class="empty">還沒有通報 — friday 遇到大賺 / 大賠 / 系統錯誤時會在這裡通報你</td></tr>
+          </tbody>
+        </table>
+      </div>
       <Pager v-if="list" :page="list.page" :page-size="list.page_size" :total="list.total" :has-more="list.has_more" @go="load" />
     </div>
 

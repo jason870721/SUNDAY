@@ -22,10 +22,12 @@ log = logging.getLogger("sunday.monitor")
 
 
 def _default_position_notify(event: dict) -> None:
-    """Production notifier: POST the position-PnL event to the evva swarm webhook."""
-    from . import events
+    """Production notifier: POST the position-PnL event to the evva swarm webhook, and (if
+    configured) push it to the User's Telegram. Both sinks are fire-and-forget — never raise."""
+    from . import events, telegram
     from .config import settings
     events.post(settings.evva_webhook_url, event)
+    telegram.send(telegram.position_text(event))
 
 
 def _f(v) -> float | None:

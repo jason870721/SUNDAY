@@ -33,7 +33,7 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
-  <div class="grid" style="grid-template-columns: 1fr 360px; align-items: start">
+  <div class="split-r" style="--aside: 360px">
     <!-- alerts -->
     <div class="panel">
       <div class="panel-head"><h2>Price Alerts</h2>
@@ -44,21 +44,23 @@ onUnmounted(() => clearInterval(timer))
           <button :class="{ on: statusFilter === 'triggered' }" @click="statusFilter = 'triggered'; loadAlerts()">triggered</button>
         </div>
       </div>
-      <table class="tbl">
-        <thead><tr><th class="left">#</th><th class="left">Symbol</th><th class="left">Condition</th><th>Ref</th><th>Status</th><th>Created</th><th></th></tr></thead>
-        <tbody>
-          <tr v-for="a in list?.items ?? []" :key="a.id">
-            <td class="left faint">{{ a.id }}</td>
-            <td class="left"><b>{{ a.symbol }}</b></td>
-            <td class="left">{{ KIND_LABEL[a.kind] ?? a.kind }} <b>{{ a.kind === 'pct_move' ? a.threshold + '%' : num(a.threshold, 2) }}</b></td>
-            <td class="faint">{{ a.ref_price ? price(a.ref_price) : '—' }}</td>
-            <td><span class="tag" :class="a.status === 'active' ? 'long' : ''">{{ a.status }}</span></td>
-            <td class="faint">{{ time(Date.parse(a.created_at)) }}</td>
-            <td><button class="btn sm ghost" @click="remove(a.id)">✕</button></td>
-          </tr>
-          <tr v-if="(list?.items.length ?? 0) === 0"><td colspan="7" class="empty">no alerts</td></tr>
-        </tbody>
-      </table>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th class="left">#</th><th class="left">Symbol</th><th class="left">Condition</th><th>Ref</th><th>Status</th><th>Created</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="a in list?.items ?? []" :key="a.id">
+              <td class="left faint">{{ a.id }}</td>
+              <td class="left"><b>{{ a.symbol }}</b></td>
+              <td class="left">{{ KIND_LABEL[a.kind] ?? a.kind }} <b>{{ a.kind === 'pct_move' ? a.threshold + '%' : num(a.threshold, 2) }}</b></td>
+              <td class="faint">{{ a.ref_price ? price(a.ref_price) : '—' }}</td>
+              <td><span class="tag" :class="a.status === 'active' ? 'long' : ''">{{ a.status }}</span></td>
+              <td class="faint">{{ time(Date.parse(a.created_at)) }}</td>
+              <td><button class="btn sm ghost" @click="remove(a.id)">✕</button></td>
+            </tr>
+            <tr v-if="(list?.items.length ?? 0) === 0"><td colspan="7" class="empty">no alerts</td></tr>
+          </tbody>
+        </table>
+      </div>
       <Pager v-if="list" :page="list.page" :page-size="list.page_size" :total="list.total" :has-more="list.has_more" @go="loadAlerts" />
     </div>
 
@@ -92,18 +94,20 @@ onUnmounted(() => clearInterval(timer))
           <button class="btn sm" style="margin-top: 18px" @click="saveStep">save</button>
           <button class="btn sm ghost" style="margin-top: 18px" @click="toggle">{{ monitor?.config.enabled ? 'disable' : 'enable' }}</button>
         </div>
-        <table class="tbl">
-          <thead><tr><th class="left">Symbol</th><th>Side</th><th>ROI%</th><th>Step</th></tr></thead>
-          <tbody>
-            <tr v-for="p in monitor?.positions ?? []" :key="p.symbol">
-              <td class="left"><b>{{ p.symbol }}</b></td>
-              <td><span class="tag" :class="p.side">{{ p.side }}</span></td>
-              <td :class="sign(p.roi_pct)">{{ pct(p.roi_pct) }}</td>
-              <td class="faint">{{ p.bucket }}</td>
-            </tr>
-            <tr v-if="(monitor?.positions.length ?? 0) === 0"><td colspan="4" class="empty">no positions watched</td></tr>
-          </tbody>
-        </table>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th class="left">Symbol</th><th>Side</th><th>ROI%</th><th>Step</th></tr></thead>
+            <tbody>
+              <tr v-for="p in monitor?.positions ?? []" :key="p.symbol">
+                <td class="left"><b>{{ p.symbol }}</b></td>
+                <td><span class="tag" :class="p.side">{{ p.side }}</span></td>
+                <td :class="sign(p.roi_pct)">{{ pct(p.roi_pct) }}</td>
+                <td class="faint">{{ p.bucket }}</td>
+              </tr>
+              <tr v-if="(monitor?.positions.length ?? 0) === 0"><td colspan="4" class="empty">no positions watched</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>

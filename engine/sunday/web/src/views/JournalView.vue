@@ -21,22 +21,24 @@ onMounted(() => load())
 </script>
 
 <template>
-  <div class="grid" style="grid-template-columns: 320px 1fr; align-items: start">
+  <div class="split" style="--aside: 320px">
     <!-- entry list -->
     <div class="panel">
       <div class="panel-head"><h2>Work Log</h2><div class="grow"></div><span class="faint">reviewer · 每日</span></div>
-      <table class="tbl">
-        <thead><tr><th class="left">Date</th><th class="left">Title</th><th>By</th></tr></thead>
-        <tbody>
-          <tr v-for="e in list?.items ?? []" :key="e.id" class="clickable" @click="selected = e"
-            :style="selected?.id === e.id ? 'background: var(--panel-3)' : ''">
-            <td class="left faint">{{ e.date ?? time(Date.parse(e.ts)) }}</td>
-            <td class="left">{{ e.title || '(untitled)' }}</td>
-            <td class="faint">{{ e.author }}</td>
-          </tr>
-          <tr v-if="(list?.items.length ?? 0) === 0"><td colspan="3" class="empty">還沒有日誌 — reviewer 每日收盤後會寫一篇</td></tr>
-        </tbody>
-      </table>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th class="left">Date</th><th class="left">Title</th><th>By</th></tr></thead>
+          <tbody>
+            <tr v-for="e in list?.items ?? []" :key="e.id" class="clickable" @click="selected = e"
+              :style="selected?.id === e.id ? 'background: var(--gold-tint)' : ''">
+              <td class="left faint">{{ e.date ?? time(Date.parse(e.ts)) }}</td>
+              <td class="left">{{ e.title || '(untitled)' }}</td>
+              <td class="faint">{{ e.author }}</td>
+            </tr>
+            <tr v-if="(list?.items.length ?? 0) === 0"><td colspan="3" class="empty">還沒有日誌 — reviewer 每日收盤後會寫一篇</td></tr>
+          </tbody>
+        </table>
+      </div>
       <Pager v-if="list" :page="list.page" :page-size="list.page_size" :total="list.total" :has-more="list.has_more" @go="load" />
     </div>
 

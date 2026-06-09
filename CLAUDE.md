@@ -25,15 +25,19 @@
 7. **realtime 用 websocket + 輪詢備援**：`pricehub.Realtime` 跑 ws mark-price 串流（testnet 餵倉位監控、
    mainnet 餵價格提醒）+ 每 `MONITOR_POLL_SEC` 輪詢備援。monitor 以「跨 bucket 才發」、alert「觸發一次」，
    故 ws 與輪詢同時跑也不會重複通知。
-8. **只有一條對外 webhook**：Sunday → evva swarm（`events.post` → `EVVA_WEBHOOK_URL`），事件
-   `position_pnl` / `price_alert`，payload `{title,body,data,to}`，自帶 `suggested_action`。
+8. **兩條對外通道（milestone-8 擴充）**：(a) **evva swarm webhook**（agent-facing，不變）：
+   Sunday → evva swarm（`events.post` → `EVVA_WEBHOOK_URL`），事件 `position_pnl` / `price_alert`，
+   payload `{title,body,data,to}`，自帶 `suggested_action`；(b) **Telegram**（User-facing，可選）：
+   `telegram.py`，report / price_alert / position_pnl 推 User 手機。未設 `TELEGRAM_BOT_TOKEN`/
+   `TELEGRAM_CHAT_ID` 即 no-op，行為與原本完全一致。兩者皆 fire-and-forget、永不 raise；金鑰只在
+   引擎側（延續不變量 2）。
 
 ## 專案結構
 
 ```
 engine/sunday/
 ├── app.py            FastAPI 組裝（lifespan + router 掛載 + 系統路由 + realtime 啟停）
-├── exchange.py       雙 ccxt（mainnet 行情 / testnet 交易）
+├── exchange.py       雙 ccxt（mainnet 行情 / testnet 交易）；時鐘偏移加固（防 -1021）
 ├── store.py          sqlite（alerts + kv）；RLock 寫鎖
 ├── config.py         proxy 設定（pydantic-settings）
 ├── indicators.py     純指標：sma/ema/rsi/bollinger/adx/macd/atr
@@ -42,7 +46,8 @@ engine/sunday/
 ├── alerts.py         價格提醒規則 + 引擎（注入式 notify）
 ├── monitor.py        倉位 ROI/bucket 監控（注入式 notify）
 ├── pricehub.py       Realtime：ws 串流 + 輪詢備援
-├── events.py         webhook builders + post（stdlib urllib）
+├── events.py         evva webhook builders + post（stdlib urllib）
+├── telegram.py       User-facing Telegram 推播（stdlib urllib；未設定即 no-op）
 ├── routers/          每模組一檔（markets/klines/funding/perp/account/indices/alerts/monitor）
 ├── manual.md         agent API 手冊（GET /manual）
 └── web/              TS + Vue 3 dashboard（Vite → dist/，FastAPI 自服於 / 與 /ui）
@@ -70,5 +75,10 @@ engine/sunday/
 
 ## 現況
 
-- **milestone-6（現行）= agent-native proxy。** 60 單元測試綠；前端 `npm run build` + `vue-tsc` 綠。
-  後續：刷新 `evva-swarm.yml` + `agents/`（swarm *消費端*）改用新 `/api/*` 介面（本次未做）。
+- **milestone-6 = agent-native proxy（地基，現行）。** **milestone-8 = 韌性 / 黑金 UI / Telegram**
+  （見 [docs/prd/milestone-8/README.md](docs/prd/milestone-8/README.md)）：
+  (1) Binance `-1021` 時鐘偏移加固（`_signed` round-trip 校時 + 落後安全偏壓 + recvWindow 10s +
+  自癒重試；ccxt `trade_ex` 開 `adjustForTimeDifference`）；(2) 前端改黑金配色、全面 responsive
+  不跑版（`.split`/`.split-r` + 側欄抽屜）；(3) `telegram.py` 把 report / 提醒 / 持倉損益推 User 手機。
+- **79 單元測試綠**（含 8 個 telegram formatter 測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
+- 後續：刷新 `evva-swarm.yml` + `agents/`（swarm *消費端*）改用新 `/api/*` 介面（本次未做）。
