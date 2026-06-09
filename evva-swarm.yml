@@ -18,7 +18,7 @@ leader:
   agent: friday
   schedule:
     cron: "*/30 * * * *"
-    prompt: "例行巡檢（非輪詢）：先 GET /api/memory/friday 回顧風控共識與持倉理由，GET /api/account/positions·/pnl 看現況（停損都還在嗎），然後自主行動或 stand down；有更新就收工前 PUT /api/memory/friday 寫回。"
+    prompt: "例行巡檢（非輪詢）：先 GET /api/memory/friday 回顧風控共識與持倉理由，GET /api/account/positions·/pnl 看現況（停損都還在嗎），然後自主行動，結束前檢查組員的 tasks 是否需要修改．或直接 stand down；有更新就收工前 PUT /api/memory/friday 寫回。"
 
 workers:
   - agent: analyst-flow
