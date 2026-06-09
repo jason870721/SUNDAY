@@ -7,6 +7,9 @@
 # evva swarm runtime state (created by `evva swarm .`)
 .vero/
 
+# watchdog agent's last-Top10 snapshot (runtime comparison state)
+.watchdog-markets.json
+
 # Python
 __pycache__/
 *.py[cod]

@@ -1,5 +1,5 @@
-# No `model:` — runs against your configured default provider/model.
-effort: high
-when_to_use: "News 分析師 — catalyst/新聞事件或 friday 指派時，用 web 工具讀新聞/事件/敘事，回報方向 + conviction + 事件風險。"
+model: deepseek-v4-pro
+effort: ultra
+when_to_use: "新聞 / 事件 / 敘事分析師 — 排程或 friday 指派時讀新聞/事件/敘事並對照數據，回報方向 + 迫近事件風險 + 來源；重大世界事件主動示警 friday。不下單。"
 inject_memory: false
 advertise_skills: true

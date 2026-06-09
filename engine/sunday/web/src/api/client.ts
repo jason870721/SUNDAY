@@ -40,6 +40,9 @@ export interface MonitorState {
   config: { enabled: boolean; step_pct: number; poll_sec: number; ws: boolean }
   positions: Array<{ symbol: string; side: string; roi_pct: number | null; bucket: number | null; mark: number | null; entry: number | null; qty: number | null }>
 }
+export interface JournalEntry {
+  id: number; ts: string; date: string | null; author: string; title: string | null; body: string
+}
 
 const API = '/api'
 
@@ -97,4 +100,8 @@ export const api = {
 
   monitor: () => req<MonitorState>(`/monitor`),
   monitorConfig: (body: Record<string, unknown>) => req<Record<string, unknown>>(`/monitor/config`, { method: 'POST', body: JSON.stringify(body) }),
+
+  journal: (p: Record<string, unknown> = {}) => req<Page<JournalEntry>>(`/journal${qs(p)}`),
+  journalEntry: (id: number) => req<JournalEntry>(`/journal/${id}`),
+  createJournal: (body: Record<string, unknown>) => req<JournalEntry>(`/journal`, { method: 'POST', body: JSON.stringify(body) }),
 }

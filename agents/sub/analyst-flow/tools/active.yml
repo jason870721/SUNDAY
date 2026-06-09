@@ -1,5 +1,8 @@
-# Swarm tools (send_message, my_tasks, task_get) are injected by the worker role.
-- http_request  # read Sunday (/desk, /market, /positions) + POST /commentary
-- web_search    # market interpretation of funding / liquidations
+# Swarm tools (send_message, list_members, my_tasks, task_get) are injected by the worker role.
+- http_request  # read Sunday: /api/indices, /api/klines(+indicators), /api/funding, /api/markets
+- web_search    # market interpretation of funding / liquidations / momentum
 - web_fetch
 - skill
+- read          # read {workdir}/MEMORY.md for friday's watchlist / context
+- edit
+- write

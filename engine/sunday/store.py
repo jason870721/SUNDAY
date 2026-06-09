@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS order_log (
     memo         VARCHAR(300)    -- length enforced at the API layer (sqlite ignores it)
 );
 CREATE INDEX IF NOT EXISTS idx_order_log_symbol ON order_log (symbol, id DESC);
+
+-- Work journal (req): the reviewer's daily reports, persisted so the User can read
+-- the team's work log in the dashboard. Body is markdown; `date` is the logical
+-- report day (a report may be written just after midnight for the prior session).
+CREATE TABLE IF NOT EXISTS journal (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts     TEXT NOT NULL,                       -- created (server UTC, ISO)
+    date   TEXT,                                -- logical report date (YYYY-MM-DD)
+    author TEXT NOT NULL DEFAULT 'reviewer',
+    title  TEXT,
+    body   TEXT NOT NULL                        -- markdown report
+);
+CREATE INDEX IF NOT EXISTS idx_journal_recent ON journal (id DESC);
 """
 
 
@@ -202,3 +215,36 @@ def latest_order(symbol: str) -> dict | None:
     d = dict(row)
     d["reduce_only"] = bool(d.get("reduce_only"))
     return d
+
+
+# --------------------------------------------------------------------------
+# Work journal — reviewer's daily reports, shown to the User (req)
+# --------------------------------------------------------------------------
+
+def add_journal(body: str, title: str | None = None,
+                date: str | None = None, author: str | None = "reviewer") -> dict:
+    """Persist one work-log entry (markdown body). `date` defaults to today (UTC)."""
+    with _LOCK:
+        cur = _db().execute(
+            "INSERT INTO journal (ts, date, author, title, body) VALUES (?,?,?,?,?)",
+            (_now(), date or _now()[:10], author or "reviewer", title, body),
+        )
+        _db().commit()
+        return get_journal(cur.lastrowid)  # reentrant: still inside _LOCK
+
+
+def get_journal(entry_id: int) -> dict | None:
+    with _LOCK:
+        row = _db().execute("SELECT * FROM journal WHERE id = ?", (entry_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_journal(author: str | None = None) -> list[dict]:
+    """All work-log entries newest-first (optionally one author), for the paged UI."""
+    with _LOCK:
+        if author:
+            rows = _db().execute(
+                "SELECT * FROM journal WHERE author = ? ORDER BY id DESC", (author,)).fetchall()
+        else:
+            rows = _db().execute("SELECT * FROM journal ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]

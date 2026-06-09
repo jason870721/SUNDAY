@@ -4,7 +4,7 @@ Thin FastAPI layer. Each API group's routes live under ``routers/`` (req 10 —
 prefixes by module), exchange access in ``exchange.py`` (mainnet data + testnet
 trade), local state in ``store.py`` (sqlite). This file only wires:
 
-  * the routers (markets / klines / funding / perp / account / indices / alerts / monitor),
+  * the routers (markets / klines / funding / perp / account / indices / alerts / monitor / journal),
   * the system routes (``/health`` ``/manual`` ``/`` ``/dashboard``), and
   * the realtime background hub (price websockets → position monitor + alert engine).
 
@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import runtime, store
 from .config import settings
-from .routers import account, alerts, funding, indices, klines, markets, monitor, perp
+from .routers import account, alerts, funding, indices, journal, klines, markets, monitor, perp
 
 log = logging.getLogger("sunday")
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Sunday", version="0.6.0", lifespan=lifespan)
 
 for _r in (markets.router, klines.router, funding.router, perp.router,
-           account.router, indices.router, alerts.router, monitor.router):
+           account.router, indices.router, alerts.router, monitor.router, journal.router):
     app.include_router(_r)
 
 # Serve the built dashboard's assets (Vite outputs to web/dist with base=/ui/).

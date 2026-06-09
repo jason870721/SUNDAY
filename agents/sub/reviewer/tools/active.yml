@@ -1,4 +1,5 @@
 # Regular evva tools only. Swarm tools (send_message, list_members, my_tasks,
 # task_get) are injected automatically by the worker role — do NOT list them here.
-- http_request  # read Sunday's trade history over HTTP (read-only; no levers)
+- http_request  # read /api/account/* (trades/orders/pnl) + POST the daily report to /api/journal
 - skill
+- read          # read {workdir}/MEMORY.md for context

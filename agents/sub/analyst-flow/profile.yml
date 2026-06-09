@@ -1,5 +1,5 @@
-# No `model:` — runs against your configured default provider/model.
+model: deepseek-v4-pro
 effort: high
-when_to_use: "Flow 分析師 — funding/OI/清算/基差事件或 friday 指派時，判讀永續微結構的反身性，回報方向 + conviction。"
+when_to_use: "技術面 / 永續微結構分析師 — 排程或 friday 指派時，掃世界指數 + 分析指定標的的 K 線/指標/資金費，回報方向 + 關鍵價位給 friday。不下單。"
 inject_memory: false
 advertise_skills: true

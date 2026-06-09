@@ -1,0 +1,5 @@
+# Swarm tools (send_message, list_members, my_tasks, task_get) are injected by the worker role.
+# Minimal toolset — this is a cheap, high-frequency watchdog: two GETs + one read/write.
+- http_request  # GET /health + GET /api/markets (read-only)
+- read          # read the previous Top10 snapshot for comparison
+- write         # persist this run's Top10 snapshot to {workdir}/.watchdog-markets.json

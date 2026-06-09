@@ -68,6 +68,27 @@ class TestStore(unittest.TestCase):
         store.record_order("X", "2", "second", {"side": "sell"})
         self.assertEqual(store.latest_order("X")["memo"], "second")
 
+    def test_journal_roundtrip(self):
+        e = store.add_journal("## 當日操作\n- 開 BTC 多", title="0609 復盤", date="2026-06-09")
+        self.assertEqual(e["author"], "reviewer")          # default author
+        self.assertEqual(e["date"], "2026-06-09")
+        self.assertEqual(e["title"], "0609 復盤")
+        self.assertIn("當日操作", e["body"])
+        self.assertEqual(store.get_journal(e["id"])["body"], e["body"])
+        self.assertIsNone(store.get_journal(9999))
+
+    def test_journal_newest_first_and_author_filter(self):
+        store.add_journal("a", author="reviewer")
+        store.add_journal("b", author="reviewer")
+        store.add_journal("x", author="friday")
+        self.assertEqual(len(store.list_journal()), 3)
+        self.assertEqual(store.list_journal()[0]["body"], "x")   # newest first (highest id)
+        self.assertEqual([r["body"] for r in store.list_journal(author="reviewer")], ["b", "a"])
+
+    def test_journal_date_defaults_to_today(self):
+        e = store.add_journal("body only")                 # no date → server today (UTC)
+        self.assertRegex(e["date"], r"^\d{4}-\d{2}-\d{2}$")
+
 
 if __name__ == "__main__":
     unittest.main()

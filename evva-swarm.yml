@@ -1,39 +1,48 @@
 name: sunday              # → webhook endpoint POST /api/swarm/sunday/event
 workdir: .
 
-# milestone-4 research desk, milestone-5 tuned: friday(desk lead = COORDINATOR) +
-# analyst-flow/analyst-news (parallel specialist coverage) + risk-monitor (adversarial)
-# + reviewer (post-mortem/playbook). friday alone pulls levers (thesis/strategy/halt).
+# milestone-7: a crypto perp trading team on Sunday (Binance USDⓈ-M proxy).
+#   friday (leader) = the SOLE trader/PM — places & manages every order via Sunday's
+#   /api/perp, each position carries TP/SL, targets ≥10% monthly return. The workers
+#   feed friday: analyst-flow (technicals + world indices), analyst-news (news/events),
+#   risk-monitor (exposure vs the friday↔risk consensus), reviewer (daily post-mortem).
 #
-# Wake discipline (invariant 6): event-gated is PRIMARY; timers are a SAFETY NET, NOT
-# market polling. friday's 30m timer is the load-bearing dead-man heartbeat (Sunday
-# safe-modes after 90m without one → 3× margin). The others are deliberately low-freq —
-# the real triggers are Sunday's notable-score / event webhooks, not these ticks.
+# Wake discipline: friday is primarily EVENT-driven — Sunday webhooks it on every 5%
+# position-PnL step and on triggered price alerts, and teammates send_message it. The
+# cron schedules below are SAFETY-NET routines (periodic scan / patrol / review), NOT
+# market polling. friday may retune any worker's cadence at runtime via schedule_set.
 
 leader:
   agent: friday
   schedule:
-    cron: "0 17 * * *"
-    prompt: "安全網巡檢（非輪詢）：POST /heartbeat 維持 dead-man liveness，順手 GET /status·/desk 看 Sunday 活著嗎、封套內嗎、籃子有無 notable 標的值得開一輪研究。有事才協調（派 analyst→綜合→踢館→拍板→回信）；無事就一句回報並 stand down。"
+    cron: "*/30 * * * *"
+    prompt: "例行巡檢（非輪詢）：先讀 {workdir}/MEMORY.md 回顧風控共識與持倉理由，GET /api/account/positions·/pnl 看現況（停損都還在嗎），然後自主行動或 stand down。"
 
 workers:
-  - agent: analyst-flow          # event-driven only：由 funding_extreme / oi_surge / basis_stretch / liq_cluster webhook 喚醒（不排程，避免輪詢）
-    cron: "0 17 * * *"
-    rompt: "檢查自己的 task 任務，根據任務指示中的市場標地 (leader 開倉或關注的市場) 利用 sunday API 查詢並分分析動能信號，整理成報告並 send_message 給 friday．"
+  - agent: analyst-flow
+    schedule:
+      cron: "*/10 * * * *" # every 10 mins
+      prompt: "例行技術面巡檢：先看 my_tasks 有無 friday 指派的標的；GET /api/indices 掃世界指數看風險胃納，對 friday 關注 / 持有的標的查 /api/klines/indicators·/funding 判讀方向與關鍵價位，send_message friday（方向 + 強度 + 支撐/壓力/建議停損 + 理由）。沒事就一句 stand down。"
   - agent: analyst-news
     schedule:
-      cron: "0 17 * * *"
-      prompt: "檢查自己的 task 任務，根據任務指示中的市場標地為中心 (leader 開倉或關注的市場) 收集新聞時事資訊並整理匯報：GET /desk 掃籃子有無迫近事件（解鎖/macro/上架/治理），有就用 web 讀新聞判讀、send_message 給 friday（方向+conviction+事件風險+來源）。除了 leader 指定的標的要關注以外，有任何世界金融，戰爭，政治或區塊鏈大事件發生也要及時彙報．沒事就一句 stand down。"
+      cron: "0 * * * *" # every hr
+      prompt: "例行新聞巡檢：先看 my_tasks；用 web 工具掃 friday 關注標的的新聞 / 解鎖 / 上架 / 鏈上動態 + 總經（CPI/FOMC/ETF）+ 重大世界金融/戰爭/政治/監管事件。有迫近事件風險或重大事件就 send_message friday（方向 + 事件與時點 + 來源）。沒事就一句 stand down。"
   - agent: risk-monitor
     schedule:
-      cron: "0 17 * * *"
-      prompt: "風控安全網巡檢: 例行巡查 friday(leader) 的行爲是否異常 GET /risk·/status 對照封套與聚合曝險，違規或逼近上限即 send_message 警告 friday（必要時建議 halt)。沒事就一句 stand down。"
+      cron: "0 * * * *" # every hr
+      prompt: "風控巡檢：GET /api/account/positions·/pnl·/orders/open，對照與 friday 談定的風控共識（單筆/總曝險/槓桿/回撤/單一標的上限）——有沒有沒停損的裸倉？超標？逼近回撤上限？高相關標的同向集中？違規或逼近就 send_message 警告 friday（哪條越線 + 具體數字 + 建議動作）。沒事就一句 stand down。"
   - agent: reviewer
     schedule:
-      cron: "0 17 * * *"
-      prompt: "當日復盤：GET /theses·/performance·/pnl·/ablation，歸因 thesis 結果（哪類 work/不 work、friday 採納判斷對不對）+ 寫 playbook commentary（author:reviewer）+ 交 friday 1-2 條具體改進建議。"
+      cron: "0 0 * * *" # 00:00 daily (was "0 24" — hour 24 is out of cron range 0-23 and broke manifest load)
+      prompt: "當日復盤：GET /api/account/trades·/orders·/positions·/pnl，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、對 10% 月目標進度），把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條可執行改進建議。"
+  - agent: watchdog          # cheap DeepSeek-flash watchdog — every 3 min, read-only health + Top10 volatility
+    schedule:
+      cron: "*/2 * * * *" # 2 mins
+      prompt: "例行看門狗巡檢（要快要省）：1. GET /health 確認 Sunday 活著；2. GET /api/markets?sort=volume&page=1&page_size=10 比對上次看 Top10 有無急拉急殺（任一 ≥3% 或 24h% 跳動 ≥5pp）/ 名單洗牌。只有發現異常才 send_message friday（指出哪項、哪標的、變多少）；都正常就直接收工、不發訊息。"
 
 settings:
-  # default = read curls auto-allow (via allow-rules, see RUNBOOK), lever POSTs ask.
+  # bypass = fully autonomous (operator-confirmed): GET reads and POST trades both run
+  # with no human approval prompt, for unattended 24/7 operation. The risk backstop is
+  # mandatory TP/SL on every order + risk-monitor's patrol + the friday↔risk consensus.
   permission_mode: bypass
   max_iterations: 99

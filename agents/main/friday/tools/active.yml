@@ -1,7 +1,11 @@
-# Regular evva tools only. Swarm tools (task_create/assign/verify, send_message,
-# list_members, schedule_set/clear) are injected automatically by the leader role —
-# do NOT list them here.
-- http_request  # operate Sunday over its HTTP API; GET/HEAD auto-allow, lever POSTs ask
+# Regular evva tools only. Swarm tools (task_create/assign/verify, task_list,
+# send_message, list_members, schedule_set/clear) are injected automatically by
+# the leader role — do NOT list them here.
+- http_request  # operate Sunday over its HTTP API (/api/markets, /klines, /perp, /account, /indices, /alerts…)
 - web_search
 - web_fetch     # pull external context when judging the market
 - skill
+- read          # recall {workdir}/MEMORY.md + read docs/PRD tickets
+- edit
+- write         # maintain {workdir}/MEMORY.md, file docs/PRD/PRD-*.md
+- bash

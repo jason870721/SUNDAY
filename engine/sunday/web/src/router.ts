@@ -7,6 +7,7 @@ export const NAV = [
   { path: '/account', title: 'Account', icon: '▦' },
   { path: '/indices', title: 'Indices', icon: '◴' },
   { path: '/alerts', title: 'Alerts', icon: '◆' },
+  { path: '/journal', title: 'Journal', icon: '✎' },
   { path: '/manual', title: 'Manual', icon: '❯' },
 ]
 
@@ -18,6 +19,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/account', component: () => import('./views/AccountView.vue') },
   { path: '/indices', component: () => import('./views/IndicesView.vue') },
   { path: '/alerts', component: () => import('./views/AlertsView.vue') },
+  { path: '/journal', component: () => import('./views/JournalView.vue') },
   { path: '/manual', component: () => import('./views/ManualView.vue') },
 ]
 

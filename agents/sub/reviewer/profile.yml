@@ -1,4 +1,5 @@
-effort: high
-when_to_use: "復盤員 — 每日復盤當日操作 + PnL，給經驗總結與策略建議交 friday。不下單、不拉 lever。"
+model: deepseek-v4-pro
+effort: ultra
+when_to_use: "復盤員 — 每日排程復盤 friday 當日操作 + PnL，歸因做對/做錯，把當日復盤 POST /api/journal 寫進 Sunday 工作日誌（User 在 dashboard Journal 分頁看）+ send_message friday 改進建議。不下單。"
 inject_memory: false
 advertise_skills: true

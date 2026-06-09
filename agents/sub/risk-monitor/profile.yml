@@ -1,4 +1,5 @@
-effort: medium
-when_to_use: "風控監控員 — 定時巡檢曝險/回撤/槓桿對照封套，逼近或越界時告警 friday（不下單、不拉 lever）。"
+model: deepseek-v4-flash
+effort: high
+when_to_use: "風控監督員 — 排程或 friday 諮詢時巡檢帳戶曝險/槓桿/回撤/裸倉，對照與 friday 談定的風控共識，越線即警告糾正 friday。不下單。"
 inject_memory: false
 advertise_skills: true

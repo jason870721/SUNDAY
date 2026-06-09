@@ -1,55 +1,55 @@
-# operate-desk 經營事件驅動永續台：看 /desk、派研究、下 thesis、切策略、叫停（desk lead 專用）
+# operate-desk 用 Sunday 下永續單、管倉位、盯盤（friday 操盤 SOP）
 
-Sunday 是執行/風險/資訊基板，在 `http://127.0.0.1:7777`。用 **`http_request`** 工具操作：傳 `{method, url, query?, body?}`，拿回 `status + 解析後的 body`。
-**GET 自動放行（唯讀）；lever POST 跳 permission 審批（僅你）。** 完整 API：`GET /manual`。
-**你設方向/信念（thesis），Sunday 確定性地做大小/時機/止損。你不手動下單。**
+Sunday 是 Binance USDⓈ-M 交易所代理，在 `http://127.0.0.1:7777`。用 **`http_request`**（`{method,url,query?,body?}` → `status + body`）操作。**行情=主網真價，下單=測試網。** 完整 API：`GET /manual`。
 
-## 一輪研究（research round）
+## 一輪操作的節奏
 
-1. **`GET /desk`** → 全籃子（BTC/ETH/SOL）此刻哪個最 notable。對它 **`GET /desk?symbol=`** 深掘。
-2. `send_message` 指派 **analyst-flow**（資金費/持倉/基差）、**analyst-news**（新聞/事件）蒐證。
-3. 綜合他們的 finding → 草擬 thesis（方向 + conviction + 失效條件 + 證據）。
-4. `send_message` 給 **risk-monitor**「試圖證偽這個 thesis」。多數反對 → 降 conviction 或不發。
-5. **`POST /thesis`** 拍板 → **回信** analyst 採納/不採納 + 一句理由。
+1. **看現況**：`GET /api/account/positions`·`/pnl`——手上有什麼、賺賠多少、TP/SL 還在不在。
+2. **找機會**：`GET /api/markets?sort=volume&order=desc` 掃量大的標的；對有興趣的看 `GET /api/markets/{symbol}`（限額/最大槓桿）、`GET /api/klines/indicators?...&set=rsi,macd,adx`、`GET /api/funding`、`GET /api/indices`（情緒/總經）。
+3. **要研究**：拿不準就 `task_assign` 派 analyst-flow（技術/資金費）、analyst-news（事件/敘事），等回報再決定。不急就設 alert 觀望。
+4. **下單**：方向 + 大小 + 槓桿 + 保證金模式 + **停利 + 停損（必帶）** + memo → `POST /api/perp/order`。
+5. **驗證 + 記錄**：看回應的成交與 TP/SL legs；把理由 / 共識 / 教訓寫進 `{workdir}/MEMORY.md`。
 
-## 看哪裡有事（GET，免審批）
+## 看行情（GET，唯讀）
 
 ```jsonc
-{ "method": "GET", "url": "http://127.0.0.1:7777/desk" }                                  // 全籃子 notable 排序
-{ "method": "GET", "url": "http://127.0.0.1:7777/desk", "query": { "symbol": "BTCUSDT" } } // 單標的：funding/OI/基差 + advisor regime/votes/funding
-{ "method": "GET", "url": "http://127.0.0.1:7777/status" }                                // 當值策略 / 倉位 / mode
-{ "method": "GET", "url": "http://127.0.0.1:7777/thesis", "query": { "symbol": "BTCUSDT" } } // 當前 active thesis
-{ "method": "GET", "url": "http://127.0.0.1:7777/positions" }
-{ "method": "GET", "url": "http://127.0.0.1:7777/risk" }                                   // 封套使用率 + 違規 + 風控事件
-{ "method": "GET", "url": "http://127.0.0.1:7777/theses", "query": { "limit": "20" } }     // thesis 史 + 結果
+{ "method":"GET", "url":"http://127.0.0.1:7777/api/markets", "query":{ "sort":"volume", "order":"desc", "page_size":"10" } }
+{ "method":"GET", "url":"http://127.0.0.1:7777/api/markets/BTCUSDT" }
+{ "method":"GET", "url":"http://127.0.0.1:7777/api/klines", "query":{ "symbol":"BTCUSDT", "interval":"1h", "limit":"200" } }
+{ "method":"GET", "url":"http://127.0.0.1:7777/api/klines/indicators", "query":{ "symbol":"BTCUSDT", "interval":"1h", "set":"rsi,macd,adx,atr" } }
+{ "method":"GET", "url":"http://127.0.0.1:7777/api/funding", "query":{ "symbol":"BTCUSDT" } }
+{ "method":"GET", "url":"http://127.0.0.1:7777/api/indices" }
 ```
 
-## Lever：下 thesis（你的主要手段；`rationale` 必填，留存給 User）
+## 下單（POST；務必帶 take_profit + stop_loss）
 
 ```jsonc
-{ "method": "POST", "url": "http://127.0.0.1:7777/thesis",
-  "body": { "symbol": "BTCUSDT", "direction": "long", "conviction": 0.4,
-            "rationale": "<為什麼：funding/事件/敘事依據>",
-            "invalidation": "<什麼條件這個 thesis 就錯了>", "invalidation_price": 60000,
-            "evidence": { "funding_annual_pct": -10.9, "catalyst": "<...>" } } }
+{ "method":"POST", "url":"http://127.0.0.1:7777/api/perp/order",
+  "body":{ "symbol":"BTCUSDT", "side":"buy", "type":"market", "notional_usd":200,
+           "leverage":5, "margin_mode":"isolated",
+           "take_profit":75000, "stop_loss":60000,
+           "memo":"為什麼下這單（≤300 字，給 User 看）" } }
 ```
 
-- `direction`：`long` / `short` / `flat`。`conviction` 0..1 → Sunday 確定性決定倉位大小（封套內）；**低於 0.2 視為 flat**。
-- `invalidation_price` → 當 stop；directed 模式自動依此 + thesis 失效退場。
-- 下完看回應 `result`（posture）；**過激進會被確定性風控擋（409）**——那是最終防線，但別依賴它。
+- `side` buy/sell · `type` market/limit（limit 要帶 `price`）· 大小用 `notional_usd`（USD，自動換張）或 `qty`（張數）。
+- **`take_profit` / `stop_loss` 是觸發價，每筆必帶**；Sunday 會掛成 reduce-only 的 TP/SL 腿。
+- limit 價被 `-4016 PERCENT_PRICE` 擋 = 離市價太遠，貼近現價或改用 market。
 
-## Lever：切策略 / 叫停 / 心跳
+## 管倉 / 盯盤
 
 ```jsonc
-{ "method": "POST", "url": "http://127.0.0.1:7777/strategy",
-  "body": { "symbol": "BTCUSDT", "strategy": "directed", "reason": "<...>" } }  // directed/momentum/mean_reversion/flat
-{ "method": "POST", "url": "http://127.0.0.1:7777/halt", "body": { "reason": "<...>", "mode": "flat" } }  // flat=全平籃子 / safe=凍新倉
-{ "method": "POST", "url": "http://127.0.0.1:7777/heartbeat", "body": {} }      // dead-man ping（timer 每 30m）
+{ "method":"POST",   "url":"http://127.0.0.1:7777/api/perp/close",          "body":{ "symbol":"BTCUSDT" } }   // 市價平倉
+{ "method":"POST",   "url":"http://127.0.0.1:7777/api/perp/leverage",       "body":{ "symbol":"BTCUSDT", "leverage":10 } }
+{ "method":"DELETE", "url":"http://127.0.0.1:7777/api/perp/orders",         "query":{ "symbol":"BTCUSDT" } }  // 撤該標所有掛單
+{ "method":"POST",   "url":"http://127.0.0.1:7777/api/alerts",              "body":{ "symbol":"BTCUSDT", "kind":"price_above", "threshold":75000, "note":"突破就回來看" } }
+{ "method":"GET",    "url":"http://127.0.0.1:7777/api/account/orders/open", "query":{ "page":"1" } }
 ```
+
+- alert / 持倉監控觸發時 Sunday 會主動 webhook 你——**設好 alert 就能安心觀望**，不必一直醒著盯盤。不需要 alert 時請取消該 alert．
 
 ## 紀律
 
-1. 下 thesis/切策略**前** GET `/status`·`/desk`（payload 是「當時」，決策看「現在」）；**後**驗證回應 posture；服務重啟後先對帳。
-2. **防守先行**：不確定就低 conviction 或 `flat`；不利事件前主動降風險。寧可錯過，不追敘事追到頂。
-3. **回信 analyst 採納與否**（advice loop）——看不到輸入有沒有落地的隊友無法改進。
-4. 你不下單；確定性封套 + drawdown 熔斷是最終防線（誰下令都擋）。細節 `GET /manual`。
+1. 每筆開倉必帶 TP/SL；倉位大小 / 槓桿在和 risk-monitor 談定的範圍內。
+2. 下單前看現況、下單後驗證回應、服務重啟後先對帳。
+3. 拿不準就派研究或設 alert；防守先行。
+4. 細節隨時 `GET /manual`。
