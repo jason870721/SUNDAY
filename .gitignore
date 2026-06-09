@@ -10,6 +10,11 @@
 # watchdog agent's last-Top10 snapshot (runtime comparison state)
 .watchdog-markets.json
 
+# Sunday runtime SQLite — created on boot (alerts / memory / reports / kv); never commit
+*.db
+*.db-shm
+*.db-wal
+
 # Python
 __pycache__/
 *.py[cod]
