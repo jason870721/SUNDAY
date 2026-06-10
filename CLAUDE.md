@@ -17,8 +17,11 @@
 2. **所有 API 免 token。** Sunday 持金鑰，agent 只持 HTTP。port 上不放交易所金鑰給 agent 看。
 3. **回傳大量資料的 list 一律分頁**（`pagination.paginate` 的統一信封 `{items,page,page_size,total,has_more}`）。
 4. **API prefix 依模組劃分**（req 10）：`/api/markets` `/api/klines` `/api/funding` `/api/perp`
-   `/api/account` `/api/indices` `/api/alerts` `/api/monitor`，各自一個 `routers/` 模組。
-5. **無 Postgres/Redis。** 唯一持久狀態 = alerts，存在單一 sqlite 檔（`store.py`，stdlib `sqlite3`）。
+   `/api/account` `/api/indices` `/api/alerts` `/api/monitor` `/api/journal` `/api/memory`
+   `/api/reports` `/api/system` `/api/admin`（admin 僅 operator 用、不對 agent 公告），各自一個
+   `routers/` 模組。
+5. **無 Postgres/Redis。** 唯一持久狀態 = 一個 sqlite 檔（alerts / order_log / journal / memory /
+   reports / kv，`store.py`，stdlib `sqlite3`）。
    sqlite wrapper 用**可重入寫鎖（RLock）**序列化所有存取 + WAL/busy_timeout（多執行緒寫入會死鎖）。
 6. **純邏輯 stdlib-only、可在任何環境單元測試**（indicators / pagination / alerts 規則 / monitor 數學 /
    indices parsers / events builders）。重依賴（ccxt/fastapi/config）一律**惰性 import**，別在模組頂層。
@@ -38,7 +41,7 @@
 engine/sunday/
 ├── app.py            FastAPI 組裝（lifespan + router 掛載 + 系統路由 + realtime 啟停）
 ├── exchange.py       雙 ccxt（mainnet 行情 / testnet 交易）；時鐘偏移加固（防 -1021）
-├── store.py          sqlite（alerts + kv）；RLock 寫鎖
+├── store.py          sqlite（alerts/order_log/journal/memory/reports/kv）；RLock 寫鎖
 ├── config.py         proxy 設定（pydantic-settings）
 ├── indicators.py     純指標：sma/ema/rsi/bollinger/adx/macd/atr
 ├── pagination.py     統一分頁 + 排序
@@ -48,7 +51,8 @@ engine/sunday/
 ├── pricehub.py       Realtime：ws 串流 + 輪詢備援
 ├── events.py         evva webhook builders + post（stdlib urllib）
 ├── telegram.py       User-facing Telegram 推播（stdlib urllib；未設定即 no-op）
-├── routers/          每模組一檔（markets/klines/funding/perp/account/indices/alerts/monitor）
+├── routers/          每模組一檔（markets/klines/funding/perp/account/indices/alerts/monitor/
+│                     journal/memory/reports/system/admin）
 ├── manual.md         agent API 手冊（GET /manual）
 └── web/              TS + Vue 3 dashboard（Vite → dist/，FastAPI 自服於 / 與 /ui）
 ```
@@ -80,5 +84,7 @@ engine/sunday/
   (1) Binance `-1021` 時鐘偏移加固（`_signed` round-trip 校時 + 落後安全偏壓 + recvWindow 10s +
   自癒重試；ccxt `trade_ex` 開 `adjustForTimeDifference`）；(2) 前端改黑金配色、全面 responsive
   不跑版（`.split`/`.split-r` + 側欄抽屜）；(3) `telegram.py` 把 report / 提醒 / 持倉損益推 User 手機。
-- **79 單元測試綠**（含 8 個 telegram formatter 測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
-- 後續：刷新 `evva-swarm.yml` + `agents/`（swarm *消費端*）改用新 `/api/*` 介面（本次未做）。
+- **86 單元測試綠**（含 telegram formatter 與 webhook 投遞失敗 log / boot probe 測試）；
+  前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
+- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 6 workers）已改用新 `/api/*` 介面；
+  系統協作全景見 [docs/workflow.md](docs/workflow.md)。

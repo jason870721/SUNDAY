@@ -49,7 +49,7 @@ Sunday 是 Binance USDⓈ-M 交易所代理，在 `http://127.0.0.1:7777`。用 
 
 ## 紀律
 
-1. 每筆開倉必帶 TP/SL；倉位大小 / 槓桿在和 risk-monitor 談定的範圍內。
+1. 每筆開倉必帶 TP/SL；倉位大小 / 槓桿在和 risk-monitor 談定的範圍內。**記憶裡還沒有風控共識（首次運行或被清）→ 先和 risk-monitor 談定、`PUT /api/memory/friday` 落盤並知會他，才准開新倉。**
 2. 下單前看現況、下單後驗證回應、服務重啟後先對帳。
 3. 拿不準就派研究或設 alert；防守先行。
 4. 細節隨時 `GET /manual`。
