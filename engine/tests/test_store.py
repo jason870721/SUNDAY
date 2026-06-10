@@ -89,6 +89,35 @@ class TestStore(unittest.TestCase):
         e = store.add_journal("body only")                 # no date → server today (UTC)
         self.assertRegex(e["date"], r"^\d{4}-\d{2}-\d{2}$")
 
+    # -- equity snapshots + high-water mark (drawdown support) -------------
+
+    def test_equity_snap_advances_hwm(self):
+        self.assertIsNone(store.equity_hwm())              # never snapped
+        store.add_equity_snap(1000.0)
+        store.add_equity_snap(1200.0)
+        store.add_equity_snap(900.0)                       # a dip must NOT lower the HWM
+        hwm, ts = store.equity_hwm()
+        self.assertEqual(hwm, 1200.0)
+        self.assertIsNotNone(ts)
+        self.assertEqual(len(store.equity_snaps()), 3)
+
+    def test_equity_snaps_newest_first(self):
+        store.add_equity_snap(1.0)
+        store.add_equity_snap(2.0)
+        self.assertEqual([s["equity"] for s in store.equity_snaps()][0], 2.0)
+
+    def test_equity_snap_prunes_old_rows_but_keeps_hwm(self):
+        store.add_equity_snap(5000.0)                      # becomes the HWM
+        store.add_equity_snap(100.0, keep_days=0)          # cutoff=now → prior rows pruned
+        self.assertEqual(len(store.equity_snaps()), 1)     # only the fresh snapshot remains
+        self.assertEqual(store.equity_hwm()[0], 5000.0)    # HWM lives in kv, survives pruning
+
+    def test_reset_wipes_equity_snaps(self):
+        store.add_equity_snap(1000.0)
+        store.reset()
+        self.assertEqual(store.equity_snaps(), [])
+        self.assertIsNone(store.equity_hwm())              # kv wiped too
+
 
 if __name__ == "__main__":
     unittest.main()

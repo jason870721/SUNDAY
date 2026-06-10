@@ -36,7 +36,7 @@ workers:
   - agent: risk-monitor
     schedule:
       cron: "0 * * * *" # every hr
-      prompt: "風控巡檢：GET /api/account/positions·/pnl·/orders/open，對照與 friday 談定的風控共識（單筆/總曝險/槓桿/回撤/單一標的上限）——有沒有沒停損的裸倉？超標？逼近回撤上限？高相關標的同向集中？違規或逼近就 send_message 警告 friday（哪條越線 + 具體數字 + 建議動作）。沒事就一句 stand down。"
+      prompt: "風控巡檢：先 GET /api/memory/friday 確認風控共識存在（沒有 = 最高優先異常，立刻找 friday 協商、不准 stand down）；GET /api/account/pnl（exposure_pct + 每倉 protection/liq_distance_pct）·/drawdown·/balance，對照共識（單筆/總曝險/槓桿/回撤/單一標的/可用餘額下限）——protection 顯示裸倉或半裸？超標？drawdown_pct 逼頂？free 逼近下限？高相關標的同向集中？違規或逼近就 send_message 警告 friday（哪條越線 + 具體數字 + 建議動作），嚴重的設 alarm 回查、連兩次未處理就 POST /api/reports 升級給 User。沒事就一句 stand down。"
   - agent: reviewer
     schedule:
       cron: "0 0 * * *" # 00:00 daily, host TZ (was "0 24" — hour 24 is out of cron range 0-23 and broke manifest load)
