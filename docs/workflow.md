@@ -1,186 +1,184 @@
-# Sunday × evva-swarm — 架構與工作流（研究台版）
+# Sunday × evva-swarm — 架構與工作流（agent-native proxy 版）
 
-> 這份文件描述**整個系統怎麼協作**：User、研究台 swarm（evva）、執行引擎（Sunday）、交易所、與 User dashboard。讀完你應該能回答兩件事：**(1) 誰真正執行下單？(2) 每個 agent 做什麼？**
-> 對應 PRD：[`prd/sunday-project-prd.md`](prd/sunday-project-prd.md) + [`prd/milestone-4/`](prd/milestone-4/)（研究台轉向）+ [`prd/milestone-5/`](prd/milestone-5/)（盤點/整鏈）。
-> 狀態：反映 **milestone-4/5 之後的正典系統**（研究台 roster + thesis 驅動 `directed` 執行 + 資訊層 + ablation）。
+> 這份文件描述**整個系統怎麼協作**：User、交易團隊 swarm（evva）、交易所代理（Sunday）、
+> 幣安、與 User dashboard。讀完你應該能回答兩件事：**(1) 誰真正執行下單？(2) 每個 agent 做什麼？**
+> 對應 PRD：[`prd/milestone-6/`](prd/milestone-6/)（轉向 agent-native proxy）+
+> [`prd/milestone-8/`](prd/milestone-8/)（韌性 / 黑金 UI / Telegram）。
+> 狀態：反映 **milestone-6 轉向之後的正典系統**。舊的「策略監督引擎」版（thesis/desk/
+> ablation/envelope，milestone-4/5）已整批移除，本文不再描述它。
 
 ---
 
 ## 0. 一句話
 
-**Sunday（Python 引擎）擁有所有確定性執行——下單、平倉、止損、風控熔斷，全是它做的。evva swarm 不下單；它經營「決策」：把 funding / 新聞 / 事件等資訊整合成一個結構化的 thesis（方向 + 信念 + 失效條件），交給 Sunday 確定性地落地成訂單。** LLM 設 **WHAT**，Python 做 **HOW**；LLM 永不在毫秒級快路徑上。
+**Sunday（Python）是一個無狀態的幣安永續交易所代理：持有金鑰、轉發行情與訂單，不做任何交易
+決策、也不做硬性風控。evva swarm 的 leader——friday——就是操盤手本人：他用通用 `http_request`
+直接呼叫 `POST /api/perp/order` 下單，六個 worker 餵他資訊、踩他煞車、替他復盤。** 風險紀律
+不在程式裡，在 friday 與 risk-monitor 談定的共識 + 每筆單強制掛交易所原生 TP/SL。
 
 ---
 
 ## 1. 全景圖
 
 ```
-   ┌──────────────────────── 研究台平面：evva swarm（:8888, Go, .vero）─────────────────────┐
-   │                                                                                        │
-   │   User ──(evva web / flat-comms)──►  friday（desk lead = 協調者）                        │
-   │                                        │   ① 拉 lever（thesis/策略/halt）  ② 派工/綜合     │
-   │           ┌────────────────────────────┼───────────────────────────────┐               │
-   │           ▼                ▼            ▼              ▼                  │ send_message  │
-   │      analyst-flow    analyst-news   risk-monitor    reviewer  ──建議──────┘ 給 friday      │
-   │      (微結構)         (新聞/敘事)    (對抗式踢館)     (復盤/playbook)                        │
-   └────────────────────────────────────────┼────────────────────────────────────────────────┘
-                ▲ ④ webhook（Sunday→swarm 喚醒）│ ③ http_request（GET 放行 / lever POST 審批）
-                │                              ▼
-   ┌────────────┴──────────────────────────────────────── 執行平面：Sunday（:7777, Python）──┐
-   │  背景 watcher（ingest 資訊 / 偵測 regime / 看門狗 / 評分喚醒）                              │
-   │                                                                                          │
-   │  lever 觸發 ─► reconcile ─► 確定性風控（封套熔斷）─► 執行（下市價單 + 掛 stop）─► postgres 帳本 │
-   │        │                                                              │                   │
-   │        └─ notify() webhook（regime/notable/risk_breach…）             └─► GET /dashboard ─► User│
-   │                                       │ ccxt                                              │
-   └───────────────────────────────────────┼──────────────────────────────────────────────────┘
-                                            ▼
-                                   Binance USDⓈ-M testnet（持倉最終真相；stop 在這裡原生執行）
+   ┌────────────────── 決策平面：evva swarm（:8888, Go, .vero）───────────────────┐
+   │                                                                              │
+   │   User ──(evva web)──►  friday（leader = PM / 唯一操盤手）                     │
+   │                           │  ① 下單/管倉（POST /api/perp/*）                   │
+   │                           │  ② task/send_message 指揮、schedule_set 調節奏     │
+   │        ┌──────────┬───────┼─────────┬───────────┬───────────┐                │
+   │        ▼          ▼       ▼         ▼           ▼           ▼  send_message  │
+   │   analyst-flow analyst-news researcher risk-monitor reviewer watchdog ──────►│
+   │   (技術面/指數) (戰術新聞)  (戰略前瞻)  (風控巡檢)   (每日復盤) (廉價看門狗)      │
+   └───────────────────────────┼──────────────────────────────────────────────────┘
+              ▲ webhook（to:"leader" → friday）│ http_request（全部免 token）
+              │                               ▼
+   ┌──────────┴──────────────────── 代理平面：Sunday（:7777, Python）──────────────┐
+   │  routers/*（markets klines funding perp account indices alerts monitor        │
+   │             journal memory reports system admin）＋ /manual ＋ /dashboard      │
+   │  pricehub.Realtime：ws mark-price 串流 + 輪詢備援                              │
+   │     ├─ monitor（倉位 ROI 跨 5% bucket）─► events.post ─► swarm webhook         │
+   │     └─ alerts（價格提醒觸發一次）      ─► telegram.send ─► User 手機（可選）    │
+   │  sqlite（唯一持久狀態：alerts / journal / memory / reports / kv）              │
+   └───────────────────────────────────┬───────────────────────────────────────────┘
+                              ccxt     │
+              mainnet（行情，真實價格，免金鑰）＋ testnet（交易，假錢，金鑰在 Sunday）
 ```
 
-**只有兩條 HTTP 邊界**（其餘一律不准跨）：
-1. **swarm → Sunday** — agents 用通用 **`http_request`** 工具打 Sunday HTTP API（GET 自動放行、lever POST 審批）。
-2. **Sunday → swarm** — RP-9 webhook（`POST :8888/api/swarm/sunday/event`）投一封信喚醒收件 agent。
+**HTTP 邊界**（其餘一律不准跨）：
 
-加上兩條對 User 的邊界：**User ↔ swarm**（evva web）、**Sunday → User**（Sunday 自服 `/dashboard`）。
+1. **swarm → Sunday** — agents 用通用 **`http_request`** 打 Sunday API（全部免 token，req 9）。
+2. **Sunday → swarm** — webhook `POST :8888/api/swarm/sunday/event`（RP-9），payload
+   `{title, body, data, to}`，目前兩種事件都送 `to:"leader"`（evva 解析成 friday）。
+3. **Sunday → User** — Telegram 推播（可選，未設 `TELEGRAM_*` 即 no-op）＋自服 `/dashboard`。
 
-> **不變量**：agent 永不碰 Sunday 的 postgres、Sunday 永不碰 `.vero`、交易所是持倉最終真相、**evva 內零 Sunday-specific code**（agents 只用通用 `http_request` + per-role skill + `/manual`）。
-
----
-
-## 2. ⭐ 誰執行下單？（執行模型——本文最重要的一節）
-
-**答案：Sunday 自動執行所有下單。agent（包含 leader friday）從不呼叫下單 API、從不在毫秒迴路。**
-
-agent 能做的最「有牙齒」的事，是 `POST /thesis`——表達一個**結構化的觀點**。Sunday 收到後，**自己**把觀點翻譯成實際訂單。三個層級分得很乾淨：
-
-| 層級 | 誰 | 做什麼 | 在快路徑？ |
-| --- | --- | --- | --- |
-| **WHAT**（觀點） | **friday（LLM）** | `POST /thesis`：`direction`(long/short/flat) + `conviction`(0..1) + `invalidation`(失效條件 / 價) + 證據 + 理由 | ❌ 分鐘~小時級，慢思考 |
-| **HOW**（執行） | **Sunday（Python）** | `directed` 模式：conviction → 倉位大小、下市價單、掛 stop、管理進出場 | ✅ 毫秒級、確定性 |
-| **熔斷**（保命） | **Sunday（Python / 交易所）** | 硬限額越線拒單、回撤觸頂自動平倉、stop 由交易所原生執行 | ✅ 最終防線，**誰下令都擋** |
-
-### thesis 怎麼變成一筆真實訂單（可對照程式碼）
-
-friday `POST /thesis {symbol:"SOLUSDT", direction:"long", conviction:0.3, invalidation_price:140, rationale:"…"}`：
-
-1. `app.py:post_thesis` → 驗證輸入（`views.validate_thesis`）→ `store.set_thesis`（存帳本）→ 切策略到 `directed` → 呼叫 `engine.reconcile(symbol)`。
-2. `engine.reconcile` 見策略=`directed` → `_reconcile_directed`：讀 thesis → conviction 0.3 ≥ floor 0.2 → 目標 = long。
-3. `_apply_target`（共用轉場邏輯）決定 hold/open/flip/freeze → 要開倉 → `_open_directed`。
-4. `_open_directed` → `risk.size_from_conviction(0.3, price, 封套)` = 0.3 × 單筆上限 → **qty**；stop = `invalidation_price`。
-5. `_enter`（**唯一的下單路徑**）→ `risk.check_order`（確定性熔斷：超單筆/曝險/槓桿 → 拒單 409）→ **`broker.place_market`（這一步才是真正在 Binance 下市價單）** → `broker.set_stop`（掛交易所原生 STOP_MARKET）→ 寫帳本。
-
-**整條鏈裡，LLM 只出現在第 1 步的「設定 thesis」。第 2–5 步全是 Python，確定性、可回放、可被風控擋。**
-
-### Sunday 下單的兩個時機
-
-1. **Lever 觸發**（agent 拉 lever 時）：friday `POST /thesis` 或 `POST /strategy` → Sunday 立即 `reconcile`：比對「目標倉位 vs 現倉」→ 開 / 平 / 翻倉 → 下市價單 + 掛 stop。**這是 agent 的觀點落地成訂單的唯一時刻。**
-2. **Sunday 自主**（風控，完全不需要 agent）：
-   - **回撤熔斷**：背景 watcher 每 tick 記錄權益；回撤觸及封套上限 → **自動 `halt(flat)` 全平 + 鎖倉**（`engine._record_pnl_snapshot` → `self.halt`），並發 `risk_breach` 通知。
-   - **stop**：是交易所原生 STOP_MARKET——價格觸及 `invalidation_price` → **Binance 直接成交**，不需 Sunday 或 agent 介入。
-   - **dead-man**：連續 ~90m 收不到 friday 的 heartbeat → 自動進 safe-mode 凍新倉。
-
-### ⚠️ 一個常見誤解：背景 tick **不會**自動反覆下單
-
-背景 watcher 每 tick（預設 60s）只做四件事：**ingest 資訊層 / 偵測 regime / 看門狗（heartbeat + 回撤）/ 評分喚醒**——它**不**依當值策略反覆開倉（`engine.tick()` 不呼叫 `reconcile`）。所以一旦 friday 設好 thesis，Sunday 開倉一次、掛好 stop，然後**讓部位依 thesis 跑**，直到下列之一發生：stop 觸及（交易所）、friday 換新 thesis / 切策略、`halt`、或回撤熔斷。
-
-### 為什麼這樣設計
-
-- **延遲與決定性**：下單必須毫秒級、可重現、可回測。LLM 慢且不確定——放進快路徑就是 bug。
-- **安全**：thesis 再激進，`check_order` 的硬限額 + 回撤熔斷仍是最終防線（不變量 7）。**即使 agent 越權或被 prompt-injection，也下不了越線的單。**
-- **能力邊界主張**：alpha 在「把資訊整合成方向 + 信念」，不在「按下單按鈕」。讓 AI 做它會贏的事（讀場面），把會輸的事（毫秒執行、硬風控）留給 Python。
+> **不變量**（完整 8 條見 [CLAUDE.md](../CLAUDE.md)）：行情 = 主網、交易 = 測試網；金鑰只在
+> Sunday；evva 內零 Sunday-specific code（agents 只靠通用 `http_request` + skill + `GET /manual`）；
+> 唯一持久狀態是一個 sqlite 檔。
 
 ---
 
-## 3. 角色盤點（5-agent 研究台）
+## 2. ⭐ 誰執行下單？（與舊版正好相反——本文最重要的一節）
 
-**只有 friday 拉 lever；其餘四個只讀、只建議（`send_message` 給 friday）。** 這對齊「只有 leader 寫帳本」。
+**答案：friday（LLM）直接下單。** 他呼叫 `POST /api/perp/order`，Sunday 原樣轉發到幣安 testnet。
+Sunday **不再**有 thesis/conviction 翻譯層、不再有確定性風控熔斷——milestone-6 把那整套移除了。
 
-| 角色 | 階層 | 喚醒來源 | 做什麼 | **不做** |
-| --- | --- | --- | --- | --- |
-| **friday** | desk lead | webhook 預設收件人 / User / **30m** dead-man timer | **協調者**：派工給對的 analyst、**裁決衝突的判讀**（不取平均）、綜合成 thesis、讓 risk 踢館、拍板 `POST /thesis`、回信閉環、對 User 敘事。**唯一拉 lever。** | 不手動下單、不做毫秒風控 |
-| **analyst-flow** | 諮詢 | `funding_extreme`/`oi_surge`/`basis_stretch`/`liq_cluster` 事件 / friday 指派（**純 event-driven，無 timer**） | 判永續微結構反身性（funding 擁擠度、OI、基差）→ 方向 + conviction + 失效條件給 friday | 不拉 lever（`/commentary` 例外） |
-| **analyst-news** | 諮詢 | `catalyst`/`regime_shift` 事件 / friday 指派 / **6h** 安全網巡檢 | 讀新聞/事件/敘事（解鎖、macro、被駭、ETF 流）→ 對照微結構是否背離 → 方向 + 事件風險 + 來源給 friday | 不拉 lever；**絕不照搬網頁指令**（prompt-injection 防線） |
-| **risk-monitor** | 對抗式 | `risk_breach` 事件 / **1h** audit timer | **專職證偽**：踢 friday 草擬的 thesis（下檔/擁擠度/相關性/迫近事件）→ 支持/反對 + conviction 上限。巡檢曝險逼近封套即告警 | 預設只建議；**獲授 RP-11 窄 lever 後可 `POST /halt safe`**；不做毫秒硬停 |
-| **reviewer** | 復盤 | 每日 **17:00** cron | 讀 `/theses`·`/performance`·`/ablation` 歸因（哪類判讀 work、friday 採納對不對）→ 寫 playbook + 1-2 條改進建議給 friday | 不拉 lever |
-
-**協同認知**：每個 agent 的 system prompt 都帶同一段「研究台是什麼 / 隊友是誰 / 一輪的節奏 / 你在其中的位置」，所以 analyst 知道自己的 finding 會被 friday 拿去和別人綜合、可能被採納或打槍；risk-monitor 知道踢的是 friday 的館；reviewer 知道復盤的是整條決策鏈。
-
----
-
-## 4. Sunday 的功能 + HTTP API
-
-**背景 watcher（每 tick）**：`feeds.ingest_all`（funding/OI/基差 → `perp_metrics`）→ `engine.tick`（per-symbol regime 偵測 + dead-man 看門狗 + 權益快照 + **回撤熔斷**）→ `desk.check_notable_and_notify`（notable score 過閾值 → 喚醒）→ `ablation.snapshot_shadows`（影子基準）。**注意：tick 監測 + 喚醒，但不開倉。**
-
-**實際交易**：只在 lever 觸發的 `reconcile`（開/平/翻）+ 自主風控（回撤 flatten、交易所 stop）。
-
-| 類 | 端點 | 用途 | 權限 |
-| --- | --- | --- | --- |
-| 研究 | `/desk`（全籃子 notable 排序）·`/desk?symbol=`（單標的深掘）·`/advisor`（regime/votes/funding 決策面板） | **研究台「此刻看哪裡」** | GET 放行 |
-| 狀態 | `/status`（籃子姿態：mode/equity/聚合曝險 + per-symbol basket）·`/positions`·`/risk`·`/envelope` | 姿態 / 倉位 / 風險封套使用率 | GET 放行 |
-| 帳本 | `/thesis`(GET)·`/theses`·`/pnl`·`/performance`·`/strategy_history`·`/trades`·`/events`·`/commentary`·`/ablation` | thesis 史 + outcome / 損益 / 歸因 / 成交 / 喚醒事件 / 市場脈絡 / **資訊層生死線** | GET 放行 |
-| 行情 | `/market` | OHLCV | GET 放行 |
-| **lever** | **`/thesis`**(POST, 主用)·`/strategy`·`/halt`·`/envelope`·`/heartbeat` | **friday 專用**：thesis / 切策略 / 叫停 / 設封套 / 心跳（reason 必填，留證給 User） | **POST 審批** |
-| 寫 | `/commentary`(POST, analyst) | 推市場脈絡給 User（無害、非交易 lever） | auto-allow |
-| UI / 文件 | `/dashboard`（7 頁 Vue 終端）·`/manual` | Sunday 自服 dashboard / 操作手冊（人 + agent 同一份） | — |
-
-**Sunday → swarm 的 webhook 事件**（自給自足：帶 status 快照 + rationale + suggested_action）：`regime_shift`、`funding_extreme`/`oi_surge`/`basis_stretch`/`vol_spike`（notable 喚醒）、`risk_breach`、`engine_degraded`、`safe_mode_entered`。
-
----
-
-## 5. 喚醒模型（event-gated；timer 只當安全網，不做市場輪詢）
-
-**核心原則**（不變量 6）：Sunday（Python）連續、便宜地盯市；由它的 notable score / 事件決定「何時值得花一個 agent 的注意力」。市場有事 → 發 webhook 喚醒對的 agent；市場平靜 → 靜默 → agent 睡、**不燒 token**。
-
-- **webhook（主要）**：Sunday 過閾值/去抖才發，按事件型別路由收件人（funding/OI → analyst-flow；catalyst → analyst-news；risk_breach → risk-monitor；其餘 → friday）。
-- **timer（安全網）**：friday **30m**（dead-man heartbeat 命脈，90m timeout → 3× 餘裕）、risk-monitor **1h**（確定性熔斷已在毫秒級，這只是策略級巡檢）、analyst-news **6h**（迫近事件日曆巡檢；重大事件仍由 catalyst 即時喚醒）、reviewer **每日 17:00**。analyst-flow **無 timer**（純事件驅動）。
-- **雙向 dead-man**：friday 30m `POST /heartbeat`；Sunday 收不到 → safe-mode 凍新倉。swarm 掛 → Sunday 守舊 stop、不開新倉。
-
----
-
-## 6. 一輪研究走過的例子（notable 喚醒 → thesis → Sunday 執行 → 復盤）
-
-1. **Sunday 偵測**：watcher ingest 到 SOL funding 年化 -55%（深度負）→ notable score 過 WAKE → `notify("funding_extreme", {SOL, status, suggested_action})` 喚醒 friday。
-2. **friday 看哪裡有事**：`GET /desk` → SOL 最 notable → `GET /desk?symbol=SOLUSDT` 深掘。
-3. **friday 派工**：`send_message` analyst-flow「判 SOL funding 反身性」、analyst-news「查 SOL 有無迫近事件」。
-4. **analyst-flow**：`GET /desk?symbol=SOL`+`/positions` → 「funding 深負＝空單付錢、持多收 carry，但 OI 擁擠」→ `send_message` friday（偏多, conviction 0.4, 失效=跌破 140, 理由）。
-5. **analyst-news**：`web_search` SOL → 「無迫近解鎖、敘事中性」→ `send_message` friday（觀望偏多, 0.3, 來源）。
-6. **friday 綜合 + 裁決衝突**：flow 想收 carry（0.4）vs news 中性（0.3）→ 取**謹慎的 0.35**。
-7. **friday 踢館**：`send_message` risk-monitor「試圖證偽 SOL 偏多 0.35」。
-8. **risk-monitor**：`GET /risk`+`/status` →「OI 擁擠、和現有 ETH 倉高相關、建議 conviction ≤ 0.3」→ 回 friday。
-9. **friday 拍板**：`POST /thesis {SOL, long, conviction:0.3, invalidation_price:140, rationale:"funding 深負收 carry；news 無迫近事件；risk 指 OI 擁擠故降至 0.3"}`。
-10. **⭐ Sunday 確定性執行（無 LLM）**：驗證 → 存 thesis → 切 `directed` → `reconcile` → `size_from_conviction(0.3)`=0.3×單筆上限 → `check_order` 過封套 → **在 Binance 下市價多單** → 掛 stop @140 → 寫帳本。
-11. **friday 閉環**：看回應 posture，`send_message` 回 analyst「採納你的 funding 判讀；因 risk 指 OI 擁擠把 conviction 降到 0.3」。
-12. **部位依 thesis 跑**：stop 在交易所；若回撤觸頂，watcher 自動 flatten。
-13. **reviewer 當日復盤**：`GET /theses`（SOL outcome）+`/ablation`（資訊層有沒有贏過 buy-hold / info-OFF）→ playbook commentary + 建議 friday。
-14. **User**：在 `/dashboard` 看到整條鏈——thesis 帳本、決策理由、ablation 生死線。
-
-每一條箭頭都有書面證據（webhook_log / `.vero` messages / theses.rationale+outcome / commentary）——**監督迴路對 User 完全透明**。
-
----
-
-## 7. 風險模型（確定性，永不 LLM）
-
-四道防線，全在 Python / 交易所層，**誰下令都擋**：
-
-1. **進場熔斷**（`risk.check_order`）：單筆上限 / 總曝險上限 / 最大槓桿 / 進場必掛 stop——越線**拒單（409）**，不是默默縮小。
-2. **回撤熔斷**（`risk.check_drawdown`）：權益回撤觸及 `max_drawdown_pct` → **自動 flatten 全平 + 鎖倉** + 發 `risk_breach`。
-3. **交易所原生 stop**：每筆進場掛 STOP_MARKET；價格觸及 → Binance 直接成交，不依賴 Sunday 在線。
-4. **雙向 dead-man**：swarm 掛 → Sunday safe-mode；Sunday 掛 → friday timer 偵測告警。
-
-**封套**由 friday `POST /envelope` 設定（reason 必填、留證）；conviction 只能在封套內決定大小，永遠突破不了硬限額。
-
----
-
-## 8. 兩段閘門（北極星）＋ 守住的紀律
-
-| | Gate-1（現在，testnet） | Gate-2（之後，真錢） |
+| 層級 | 誰 | 做什麼 |
 | --- | --- | --- |
-| 衡量 | **swarm 機制對不對**（正確地派研究/綜合/踢館/拍板/回信/叫停）+ **資訊整合有跡象加值**（看 `/ablation`） | **賺不賺**（真實長期 P&L） |
-| 成敗 | **與獲利無關** | P&L 為正 |
+| **決策 + 執行** | **friday（LLM）** | 整合隊友判讀 → 直接 `POST /api/perp/order`（槓桿/逐倉全倉/TP/SL/memo）、`POST /api/perp/close`、撤單、調 TP/SL |
+| **轉發** | **Sunday（Python）** | 驗參數格式（side/type/margin_mode 枚舉、memo ≤300 字）→ ccxt → 幣安。不判斷「該不該下」 |
+| **最後防線** | **交易所** | TP/SL 是幣安原生 reduce-only trigger 單——觸價即成交，不依賴 Sunday 或 agent 在線 |
 
-- **獲利永遠不是 Gate-1 的 gate**——別把 testnet 的 P&L 當 KPI。
-- **edge 主張一律附 ablation 證據**（不變量 11）：對照 buy-hold / funding-carry 基準 + 資訊層 OFF 的同一 swarm。沒證據不准宣稱 edge、不准轉真錢。
-- **evva 內零 Sunday-specific code**；**確定性風控在 Python/交易所、永不在 LLM**；**只有 friday 拉 lever**；**Gate-1 全程 testnet**。
+**風險紀律的真實所在**（誠實版）：
 
-> 下一個 gate = 第一次**一個月 testnet running test**（M4.1）。pre-flight：`./scripts/run-tests.sh`（128 綠）+ `./scripts/smoke.sh`（對 running Sunday 驗 HTTP 契約）。
+1. **鐵則：每筆開倉必帶 `take_profit` + `stop_loss`**（friday 的 system prompt 底線，無例外）。
+2. **friday ↔ risk-monitor 共識**：單筆上限 / 槓桿 / 總曝險 / 回撤上限，談定後寫進
+   `PUT /api/memory/friday`；risk-monitor 每小時巡檢對照、越線就警告。
+3. **全程 testnet 假錢** + `permission_mode: bypass`（無人值守 7×24，operator 已確認）。
+
+> ⚠️ 注意這個信任模型的邊界：「只有 friday 下單」是 **prompt 紀律**，不是技術強制——Sunday API
+> 免 token，任何 worker 技術上都打得到 `/api/perp/*`。worker 的 system prompt 都明文「不下單、
+> 只建議」，而 testnet 假錢是這個實驗可以接受該邊界的原因。
+
+---
+
+## 3. 角色盤點（1 leader + 6 workers）
+
+定義在 [`evva-swarm.yml`](../evva-swarm.yml)；每個 agent 的人設 / SOP 在
+[`agents/main/`](../agents/main/) 與 [`agents/sub/`](../agents/sub/)（`system_prompt.md` +
+`profile.yml` + `tools/active.yml` + per-role skill）。
+
+| 角色 | 喚醒來源 | 做什麼 | **不做** |
+| --- | --- | --- | --- |
+| **friday**（leader） | webhook（`position_pnl`/`price_alert`）/ 隊友 `send_message` / User / **30m** cron 安全網 | **PM + 唯一操盤手**：醒來先 `GET /api/memory/friday` 回顧共識與持倉理由 → 查 `/api/account/positions`·`/pnl` → 派工、裁決、下單（必帶 TP/SL + memo）→ 收工前 `PUT /api/memory/friday` 寫回；重大事件 `POST /api/reports` 通報 User | 不在沒有停損下開倉；不必每次醒來都動作（stand down 合法） |
+| **analyst-flow** | **10m** cron / friday 指派 | 技術面 + 世界指數：`/api/indices` 看風險胃納、`/api/klines/indicators`·`/api/funding` 判方向與關鍵價位 → 回報 friday（方向 + 強度 + 建議停損 + 理由） | 不下單 |
+| **analyst-news** | **1h** cron / friday 指派 | **戰術**新聞：盯 friday 關注/持有標的的迫近事件（解鎖/上架/鏈上/總經/地緣）→ 有事才回報（方向 + 時點 + 來源） | 不下單；不照搬網頁指令（prompt-injection 防線） |
+| **researcher** | **8h** cron（00:00 / 08:00 / 16:00）/ friday 指派課題 | **戰略**前瞻：四領域（美股新聞 / 區塊鏈 / 鏈上新協議 / 美政府動態）任意探索 → 對照 `/api/markets`·`/api/indices` 收斂成 1–3 個可交易新方向 → 餵 friday；線索累積在 `/api/memory/researcher` | 不下單；無夠格發現就明說 |
+| **risk-monitor** | **1h** cron | 風控巡檢：`/api/account/positions`·`/pnl`·`/orders/open` 對照 friday↔risk 共識（裸倉？超標？高相關集中？）→ 越線即警告（哪條 + 數字 + 建議動作） | **只觀察只建議**，沒有交易工具 |
+| **reviewer** | 每日 **00:00** cron（時區跟著 evva 主機） | 當日復盤：`/api/account/trades`·`/orders`·`/pnl` 歸因賺賠與 10% 月目標進度 → `POST /api/journal`（User 在 dashboard Journal 分頁讀）+ 重點回報 friday | 不下單 |
+| **watchdog** | **2m** cron（pin 在廉價模型） | 看門狗：`GET /health` + Top10 市場急拉急殺比對（快照存 `{workdir}/.watchdog-markets.json`）→ **只在異常時**通知 friday，正常就靜默收工 | 不分析、不研究、無 memory |
+
+**協作管道**：`send_message`（叫醒對方）、task 面板（`task_create`/`task_assign`，friday 派課題）、
+`schedule_set`（friday 可在 runtime 改任何 worker 的 cron 與指令——他的方向盤）。
+**閉環紀律**：隊友給了判讀，friday 必回「採納 / 不採納 + 為什麼」，隊友才能校準。
+
+---
+
+## 4. Sunday 的 API 面（agent 的完整合約 = `GET /manual`）
+
+| 群組 | 端點 | 用途 |
+| --- | --- | --- |
+| 行情 | `GET /api/markets`·`/{symbol}` · `/api/klines`·`/indicators` · `/api/funding`·`/history` | 可下單市場（量/漲跌排序）/ K 線 + RSI/MACD/ADX… / 資金費（mainnet 真實價格） |
+| 交易 | `POST /api/perp/order`·`/close`·`/leverage`·`/margin-mode` · `DELETE /api/perp/order/{id}`·`/orders` | 永續下單（TP/SL/memo）/ 平倉 / 撤單（testnet） |
+| 帳戶 | `GET /api/account/positions`·`/balance`·`/pnl`·`/orders/open`·`/orders`·`/trades` | 倉位 / 權益 / 損益 / 訂單與成交史 |
+| 外部指數 | `GET /api/indices`·`/{key}` | 恐懼貪婪、BTC dominance、VIX、DXY、美股、美債、黃金（TTL 快取） |
+| 提醒/監控 | `POST·GET·DELETE /api/alerts` · `GET /api/monitor`·`POST /config` | 價格提醒（觸發一次）/ 倉位 ROI 監控開關與步長 |
+| 協作狀態 | `GET·PUT /api/memory/{agent}` · `POST·GET /api/journal` · `POST·GET /api/reports` | agent 長期記憶（6 個 agent 各一份 markdown）/ reviewer 日誌 / friday→User 快訊 |
+| 系統 | `GET /health` · `GET /api/system/time` · `GET /manual` · `/dashboard` | 活性 / 時間時區錨點 / agent 手冊 / User 介面 |
+
+慣例：回大量資料的 list 一律分頁信封 `{items, page, page_size, total, has_more}`；全部免 token。
+
+---
+
+## 5. 喚醒模型（webhook 主動推 + cron 安全網）
+
+**核心**：Sunday 的 `pricehub.Realtime` 用 ws mark-price 串流（testnet 餵倉位監控、mainnet 餵
+價格提醒）+ 每 `MONITOR_POLL_SEC` 輪詢備援，連續、便宜地盯市；**值得花 agent 注意力的時刻**
+由它推 webhook 喚醒 friday。市場平靜 → agent 睡、不燒 token。
+
+- **兩種事件**（`events.py`，皆 `to:"leader"` → friday）：
+  - `position_pnl` — 持倉 ROI 每跨一個 5% bucket（`MONITOR_STEP_PCT`）通報一次；
+  - `price_alert` — friday 設的價格/波動提醒觸發（one-shot，觸發即失效）。
+  - 兩者 payload 自帶數字 + `suggested_action`，friday 醒來第一回合就能行動。
+  - **去重**：monitor「跨 bucket 才發」、alert「觸發一次」——ws 與輪詢同時跑也不重複。
+  - **可觀測性**：每一次投遞失敗（URL 空白 / swarm 拒收 / 不可達）都會留 warning log；
+    引擎啟動時 probe swarm 的 `/healthz`，不可達就大聲警告（事件會被丟棄並記錄）。
+- **cron 安全網**（見 §3 表）：friday 30m 例行巡檢「不是輪詢」，是 webhook 失靈時的保底；
+  各 worker 的 cron 同理。friday 可用 `schedule_set` 隨時調整。
+- **User 通道（與 swarm 平行）**：`price_alert` / `position_pnl` / `report` 同步推 Telegram
+  （`telegram.py`，未設定即 no-op）；reviewer 日誌與 friday 通報落在 dashboard 的
+  Journal / Reports 分頁。
+
+---
+
+## 6. 一輪協作走過的例子（webhook 喚醒 → 團隊研究 → 下單 → 復盤）
+
+1. **friday 開倉**：前一輪他做多 SOLUSDT（`POST /api/perp/order`，5×、isolated、TP 180 / SL 140、
+   memo 寫理由），並 `POST /api/alerts` 在 150 設了加碼觀察價。
+2. **Sunday 盯市**：ws 串流看著 mark price；SOL 漲 5% ROI → monitor 跨 bucket →
+   `position_pnl` webhook 喚醒 friday（同時推 Telegram 給 User）。
+3. **friday 醒來**：`GET /api/memory/friday` 回顧持倉理由 → `GET /api/account/positions`·`/pnl`
+   對帳 → 判斷要不要移停損；不確定就 `send_message` analyst-flow「SOL 動能還在嗎」。
+4. **analyst-flow**：`GET /api/klines/indicators?symbol=SOLUSDT&set=rsi,macd,adx` + `/api/funding`
+   → 回 friday「動能仍多、但資金費轉熱，建議停損上移到成本」。
+5. **friday 行動**：撤舊 TP/SL、重掛新 SL（保本）→ 回 analyst-flow「採納，理由 X」→
+   `PUT /api/memory/friday` 更新持倉理由 → 收工。
+6. **risk-monitor（整點巡檢）**：對照共識——曝險未超標、每倉都有停損 → 一句 stand down。
+7. **reviewer（00:00）**：`GET /api/account/trades`·`/pnl` 歸因當日 → `POST /api/journal`
+   （User 在 dashboard 讀）→ 重點 + 1–3 條建議回 friday。
+8. **User**：手機收到 Telegram 推播；dashboard 看倉位 memo、Journal、Reports——
+   整條決策鏈（memo / memory / journal / reports）對 User 透明。
+
+---
+
+## 7. 狀態與證據（誰寫哪裡、誰讀哪裡）
+
+| 儲存 | 寫 | 讀 | 用途 |
+| --- | --- | --- | --- |
+| `/api/memory/friday` | friday | friday（每次醒來）、risk-monitor（對照共識） | 風控共識、持倉理由、教訓、watchlist |
+| `/api/memory/<worker>` | 各 worker | 自己 + friday（如 `memory/researcher`） | 線索接續、對照副本 |
+| `/api/journal` | reviewer（每日） | User（dashboard） | 復盤日誌 |
+| `/api/reports` | friday（事件驅動） | User（dashboard + Telegram） | 大賺 / 大賠 / 系統錯誤快訊 |
+| 訂單 `memo` | friday（隨單） | User（倉位查詢回顯） | 每一筆單的「為什麼」 |
+| `docs/PRD/` | 任何 agent | 開發者 | 對 Sunday 的功能需求開票 |
+
+---
+
+## 8. 目標與閘門
+
+- **目標**：friday 帶隊在 testnet 達成**月報酬 ≥ 10%**——但更重要的衡量是 multi-agent
+  completeness oracle：**一個 swarm 只靠通用 `http_request` + `GET /manual`，能不能把任意
+  HTTP 外部系統用好**（派工 / 綜合 / 踩煞車 / 閉環 / 對 User 敘事）。
+- **全程 testnet 假錢**；`permission_mode: bypass` 的前提就是這一條。
+- pre-flight：`./scripts/run-tests.sh`（單元測試全綠）+ `./scripts/smoke.sh`（對 running Sunday
+  驗 HTTP 契約）+ `./scripts/smoke-webhook.sh`（對 running evva 驗 webhook 收口）。
