@@ -1,6 +1,10 @@
 # Regular evva tools only. Swarm tools (send_message, list_members, my_tasks,
 # task_get, alarm_set/clear) are injected automatically by the worker role — do
-# NOT list them here, and do NOT list the solo alarm_create/list/cancel.
+# NOT list them, nor the solo alarm_create/list/cancel.
 - http_request  # read /api/account/* (trades/orders/pnl) + POST the daily report to /api/journal
+- repl          # python over the day's trades: hit rate, win/loss, expectancy, progress vs 10%/mo
+- calc          # one-off arithmetic
 - skill
-- read          # read docs/PRD tickets (long-term memory now via http_request → /api/memory/reviewer)
+- read          # docs/prd tickets
+- write         # file docs/prd/PRD-*.md (the prompt promises ticket-filing; the tool must exist)
+- tool_search   # load deferred tools (json_query / excel) on demand

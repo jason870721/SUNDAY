@@ -2,7 +2,7 @@
 # effort. A built-in model pin also switches THIS member's provider to DeepSeek (needs the
 # deepseek API key configured in evva), so it runs cheap alongside the default-provider agents.
 model: deepseek-v4-flash
-effort: medium
-when_to_use: "低成本看門狗 — 每 3 分鐘檢查 Sunday health + Top10 市場突發波動，發現異常才通知 friday。不下單、不研究。"
+effort: low
+when_to_use: "低成本看門狗 — 每 5 分鐘檢查 Sunday health + Top10 市場突發波動，發現異常才通知 friday。不下單、不研究。"
 inject_memory: false
 advertise_skills: false

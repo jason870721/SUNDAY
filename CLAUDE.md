@@ -87,5 +87,8 @@ engine/sunday/
   不跑版（`.split`/`.split-r` + 側欄抽屜）；(3) `telegram.py` 把 report / 提醒 / 持倉損益推 User 手機。
 - **107 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
   protection 風控數學與 equity 快照測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
-- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 6 workers）已改用新 `/api/*` 介面；
+- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 7 workers）採**決策/執行分離**：
+  friday = 指揮官/PM（order ticket + 調度 + 驗收），trader = 執行台（下單/管倉/對帳；
+  `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）；每個 agent 都有
+  main_agent 級 system prompt + 角色化工具櫃（active + deferr，深櫃工具靠 tool_search 載入）。
   系統協作全景見 [docs/workflow.md](docs/workflow.md)。

@@ -1,5 +1,5 @@
 model: deepseek-v4-pro
 effort: ultra
-when_to_use: "復盤員 — 每日排程復盤 friday 當日操作 + PnL，歸因做對/做錯，把當日復盤 POST /api/journal 寫進 Sunday 工作日誌（User 在 dashboard Journal 分頁看）+ send_message friday 改進建議。不下單。"
+when_to_use: "復盤員 — 每日復盤團隊操作與 PnL（repl 算命中率/賺賠比），決策（friday）與執行（trader）分開歸因，POST /api/journal 給 User + 改進建議回 friday 並追蹤落實。不下單。"
 inject_memory: false
 advertise_skills: true

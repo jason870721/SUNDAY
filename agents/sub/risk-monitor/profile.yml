@@ -4,6 +4,6 @@
 # cheap polling. Pinning it to a budget tier (as watchdog is) saved pennies against
 # the cost of one missed naked position.
 effort: high
-when_to_use: "風控監督員 — 排程或 friday 諮詢時巡檢帳戶曝險/槓桿/回撤/裸倉，對照與 friday 談定的風控共識，越線即警告糾正 friday。不下單。"
+when_to_use: "風控監督員 — 排程或被諮詢時巡檢曝險/槓桿/回撤/裸倉，對照 friday↔risk 共識：決策越線警告 friday、執行缺陷點名 trader，連兩次未處理升級 User。不下單。"
 inject_memory: false
 advertise_skills: true

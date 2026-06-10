@@ -1,10 +1,10 @@
 # Regular evva tools only. Swarm tools (send_message, list_members, my_tasks,
 # task_get, alarm_set/clear) are injected automatically by the worker role — do
-# NOT list them here, and do NOT list the solo alarm_create/list/cancel (the
-# escalation re-check alarms in the system prompt use the injected alarm_set).
-- http_request  # read Sunday's account state over HTTP (/api/account/*; read-only, no trading)
+# NOT list them, nor the solo alarm_create/list/cancel (escalation re-check alarms
+# use the injected alarm_set).
+- http_request  # read Sunday's account state (/api/account/*; read-only, no trading)
+- calc          # consensus math (exposure sums, equity-% caps) — warning numbers are never mental math
 - skill
-- read          # read docs/PRD tickets (risk consensus / memory now via http_request → /api/memory)
-- edit
-- write
-- calc          # consensus math (equity-% caps, exposure sums) without LLM mental arithmetic
+- read          # docs/prd tickets
+- write         # file docs/prd/PRD-*.md; keep the consensus mirror via /api/memory instead
+- tool_search   # load deferred tools (repl / json_query) on demand

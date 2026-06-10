@@ -1,0 +1,3 @@
+# Deferred — advertised in the system prompt's 工具櫃 (the harness doesn't list these).
+- repl        # python scenario tables: "if BTC −10%, account drawdown = ?"
+- json_query  # pluck fields from large /api/account/pnl responses

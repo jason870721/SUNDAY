@@ -19,7 +19,7 @@ from .. import store
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
-AGENTS = ("friday", "analyst-flow", "analyst-news", "researcher", "risk-monitor", "reviewer")
+AGENTS = ("friday", "trader", "analyst-flow", "analyst-news", "researcher", "risk-monitor", "reviewer")
 
 
 class MemoryReq(BaseModel):

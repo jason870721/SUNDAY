@@ -1,0 +1,5 @@
+# Deferred tools — names are NOT advertised to the model automatically; the system
+# prompt's 工具櫃 section lists them so trader knows to tool_search before calling.
+- write       # file docs/prd/PRD-*.md tickets
+- json_query  # pluck fields out of large JSON responses
+- repl        # python for heavier execution math (slippage stats etc.)

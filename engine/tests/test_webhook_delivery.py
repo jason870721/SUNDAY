@@ -65,7 +65,8 @@ class _ConfigStub:
     def __init__(self, url: str, step_pct: float = 5.0):
         self._mod = types.ModuleType("sunday.config")
         self._mod.settings = types.SimpleNamespace(
-            evva_webhook_url=url, monitor_step_pct=step_pct, monitor_enabled=True)
+            evva_webhook_url=url, monitor_step_pct=step_pct, monitor_enabled=True,
+            monitor_webhook_to="leader")
         self._prev = sys.modules.get("sunday.config")
 
     def __enter__(self):

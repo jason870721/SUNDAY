@@ -75,18 +75,25 @@ class Monitor:
     thread and the ws loop both touch the book; reentrant so refresh→evaluate nests)."""
 
     def __init__(self, notify: Callable[[dict], None] | None = None,
-                 step_pct: float | None = None) -> None:
+                 step_pct: float | None = None, to: str | None = None) -> None:
         self.book: dict[str, dict] = {}      # symbol id (BTCUSDT) -> {side, entry, qty, margin, mark}
         self.buckets: dict[str, int] = {}    # symbol id -> last-notified step bucket
         self._lock = threading.RLock()
         self._notify = notify or _default_position_notify
         self._step_pct = step_pct            # None → read live settings (tests inject a fixed step)
+        self._webhook_to = to                # None → read live settings (which member the event wakes)
 
     def _step(self) -> float:
         if self._step_pct is not None:
             return float(self._step_pct)
         from .config import settings
         return float(settings.monitor_step_pct)
+
+    def _to(self) -> str:
+        if self._webhook_to is not None:
+            return self._webhook_to
+        from .config import settings
+        return settings.monitor_webhook_to
 
     def symbols(self) -> list[str]:
         with self._lock:
@@ -147,7 +154,8 @@ class Monitor:
 
     def _fire(self, symbol, side, roi, upnl, mark, entry) -> None:
         from . import events  # pure builder (no config) — keeps the event shape testable
-        self._notify(events.position_pnl_event(symbol, side, roi, upnl, mark, entry, self._step()))
+        self._notify(events.position_pnl_event(symbol, side, roi, upnl, mark, entry, self._step(),
+                                               to=self._to()))
         log.info("position_pnl %s %s roi=%+.1f%% fired", symbol, side, roi)
 
     def snapshot(self) -> list[dict]:
