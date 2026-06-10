@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from .. import exchange, store
+from .. import exchange, protection as riskmath, store
 from ..apiutil import ex_call, require_trade_key, to_float
 from ..pagination import paginate
 
@@ -19,15 +19,25 @@ router = APIRouter(prefix="/api/account", tags=["account"])
 _ORDER_FIELDS = ("order_id", "ts", "side", "type", "qty", "notional_usd", "price",
                  "leverage", "margin_mode", "reduce_only", "take_profit", "stop_loss")
 
+_leg = riskmath.classify_leg  # TP/SL trigger-leg classification (pure, unit-tested)
 
-def _leg(order_type: str | None) -> str | None:
-    """Classify a Binance order type as a take-profit / stop-loss trigger leg."""
-    t = (order_type or "").upper()
-    if "TAKE_PROFIT" in t:
-        return "take_profit"
-    if "STOP" in t:
-        return "stop_loss"
-    return None
+
+def _legs_by_symbol() -> dict[str, list[dict]] | None:
+    """Open trigger legs grouped by symbol, for per-position protection flags.
+    None (= unknown) when the open-orders read fails — never a false naked-position."""
+    try:
+        grouped: dict[str, list[dict]] = {}
+        for o in ex_call(lambda: exchange.fetch_open_orders(None)):
+            leg = _leg(o.get("type"))
+            if leg:
+                grouped.setdefault(o.get("symbol"), []).append({
+                    "tp_sl": leg,
+                    "amount": to_float(o.get("origQty")),
+                    "close_position": bool(o.get("closePosition")),
+                })
+        return grouped
+    except Exception:
+        return None
 
 
 def _safe_leverage() -> dict:
@@ -37,7 +47,8 @@ def _safe_leverage() -> dict:
         return {}
 
 
-def _position_row(p: dict, journal: dict | None = None) -> dict:
+def _position_row(p: dict, journal: dict | None = None,
+                  legs: dict[str, list[dict]] | None = None) -> dict:
     amt = to_float(p.get("positionAmt")) or 0.0
     mark = to_float(p.get("markPrice"))
     lev = to_float(p.get("leverage"))
@@ -60,6 +71,10 @@ def _position_row(p: dict, journal: dict | None = None) -> dict:
         "roi_pct": round(roi, 2) if roi is not None else None,
         # Binance reports 0 for a cross position (liquidation is account-wide) → none.
         "liquidation_price": liq if liq else None,
+        "liq_distance_pct": riskmath.liq_distance_pct(mark, liq if liq else None),
+        # TP/SL trigger legs joined server-side (naked-position check); None = unknown.
+        "protection": riskmath.protection(abs(amt), legs.get(p.get("symbol"), []))
+                      if legs is not None else None,
         # joined from the order journal — the agent's rationale + params for this symbol
         "memo": log.get("memo") if log else None,
         "order": {k: log.get(k) for k in _ORDER_FIELDS} if log else None,
@@ -102,11 +117,13 @@ def _trade_row(t: dict) -> dict:
 
 @router.get("/positions")
 def positions(page: int = 1, page_size: int = 50) -> dict:
-    """Open positions with ROI%, leverage, liquidation price + the agent's order memo."""
+    """Open positions with ROI%, leverage, liquidation distance, TP/SL protection flags
+    + the agent's order memo."""
     require_trade_key()
     raw = ex_call(exchange.fetch_positions)
     journal = {p.get("symbol"): store.latest_order(p.get("symbol")) for p in raw}
-    return paginate([_position_row(p, journal) for p in raw], page, page_size)
+    legs = _legs_by_symbol()
+    return paginate([_position_row(p, journal, legs) for p in raw], page, page_size)
 
 
 @router.get("/balance")
@@ -125,16 +142,38 @@ def balance() -> dict:
 
 @router.get("/pnl")
 def pnl() -> dict:
-    """Account PnL: equity + total unrealized + per-position breakdown.
-    Per-symbol realized PnL is available via /api/account/trades."""
+    """Account PnL: equity + total unrealized + exposure aggregates + per-position
+    breakdown. Per-symbol realized PnL is available via /api/account/trades."""
     require_trade_key()
     raw = ex_call(exchange.fetch_positions)
     acct = ex_call(exchange.fetch_account)
     journal = {p.get("symbol"): store.latest_order(p.get("symbol")) for p in raw}
+    legs = _legs_by_symbol()
+    equity = to_float(acct.get("totalMarginBalance"))
+    rows = [_position_row(p, journal, legs) for p in raw]
     return {
-        "equity": to_float(acct.get("totalMarginBalance")),
+        "equity": equity,
         "unrealized_pnl": to_float(acct.get("totalUnrealizedProfit")),
-        "positions": [_position_row(p, journal) for p in raw],
+        **riskmath.exposure(rows, equity),    # total_notional + exposure_pct
+        "positions": rows,
+    }
+
+
+@router.get("/drawdown")
+def drawdown() -> dict:
+    """Current equity vs the recorded high-water mark (snapshots accrue while the
+    engine runs — `samples` says how much history backs the number)."""
+    require_trade_key()
+    acct = ex_call(exchange.fetch_account)
+    equity = to_float(acct.get("totalMarginBalance"))
+    hwm = store.equity_hwm()
+    high_water, hwm_ts = hwm if hwm else (equity, None)
+    return {
+        "equity": equity,
+        "high_water": high_water,
+        "high_water_ts": hwm_ts,
+        "drawdown_pct": riskmath.drawdown_pct(equity, high_water),
+        "samples": len(store.equity_snaps()),
     }
 
 

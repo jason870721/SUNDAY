@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     monitor_enabled: bool = True
     monitor_step_pct: float = 5.0
     monitor_poll_sec: int = 15        # position-book refresh / REST fallback cadence
+    equity_snap_sec: int = 300        # equity snapshot cadence (drawdown high-water mark)
 
     # --- realtime price hub (req 5/6) ------------------------------------
     ws_enabled: bool = True            # set false to run monitor/alerts on REST polling only

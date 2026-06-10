@@ -60,13 +60,23 @@ curl -sX DELETE "http://127.0.0.1:7777/api/perp/orders?symbol=BTCUSDT"          
 ## 3 · 帳戶：倉位 / 損益 / 訂單 `/api/account`（測試網）
 
 ```bash
-curl -s http://127.0.0.1:7777/api/account/positions        # 開倉 + 每倉 ROI%
+curl -s http://127.0.0.1:7777/api/account/positions        # 開倉 + 每倉 ROI%（含 protection / liq_distance_pct）
 curl -s http://127.0.0.1:7777/api/account/balance          # equity / free / used
-curl -s http://127.0.0.1:7777/api/account/pnl              # equity + 總未實現 + 每倉拆解
+curl -s http://127.0.0.1:7777/api/account/pnl              # equity + 總未實現 + 曝險聚合 + 每倉拆解
+curl -s http://127.0.0.1:7777/api/account/drawdown         # 權益 vs 高水位（回撤 %，引擎自動快照）
 curl -s "http://127.0.0.1:7777/api/account/orders/open?page=1"          # 掛單（可加 &symbol=）
 curl -s "http://127.0.0.1:7777/api/account/orders?symbol=BTCUSDT"       # 歷史訂單（需 symbol，分頁）
 curl -s "http://127.0.0.1:7777/api/account/trades?symbol=BTCUSDT"       # 成交（含 realized PnL，分頁）
 ```
+
+風控視角欄位（給巡檢用，引擎算好、不用自己 join / 心算）：
+
+- 每倉 `protection`：`{take_profit, stop_loss, sl_qty_covers}`——TP/SL 觸發單還掛著嗎、SL 數量
+  蓋不蓋得住倉位（`false` = 裸倉或半裸倉）；讀不到掛單時為 `null`（未知，不是沒有）。
+- 每倉 `liq_distance_pct`：現價離清算價的距離 %（cross 倉無逐倉清算價 → `null`）。
+- `/pnl` 的 `total_notional` / `exposure_pct`：全帳戶名目曝險與占權益比。
+- `/drawdown`：`{equity, high_water, high_water_ts, drawdown_pct, samples}`——引擎每
+  `EQUITY_SNAP_SEC`（預設 300s）自動快照權益，`samples` 是已累積的快照數（剛開機時少、參考性低）。
 
 ## 4 · 外部指數 `/api/indices`
 

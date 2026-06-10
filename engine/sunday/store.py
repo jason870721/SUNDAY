@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS report (
     body  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_report_recent ON report (id DESC);
+
+-- Equity snapshots: the poll loop records account equity periodically so drawdown is
+-- computable against a high-water mark (the HWM itself lives in kv and survives the
+-- snapshot window pruning). Without this, "max drawdown" in the risk consensus is
+-- unenforceable — no one holds equity history.
+CREATE TABLE IF NOT EXISTS equity_snap (
+    ts     TEXT PRIMARY KEY,                    -- snapshot time (server UTC, ISO)
+    equity REAL NOT NULL
+);
 """
 
 
@@ -134,7 +143,7 @@ def _db() -> sqlite3.Connection:
 
 
 # Every table the proxy persists — the unit a test reset wipes (schema stays; rows go).
-_TABLES = ("alerts", "kv", "order_log", "journal", "memory", "report")
+_TABLES = ("alerts", "kv", "order_log", "journal", "memory", "report", "equity_snap")
 
 
 def reset() -> dict[str, int]:
@@ -319,8 +328,44 @@ def list_memory() -> list[dict]:
 
 
 # --------------------------------------------------------------------------
-# User-facing reports — friday's important notices (big PnL / system error)
+# Equity snapshots + high-water mark — drawdown support for risk-monitor
 # --------------------------------------------------------------------------
+
+_EQUITY_KEEP_DAYS = 30  # snapshot window; the HWM in kv outlives pruning
+
+
+def add_equity_snap(equity: float, keep_days: int = _EQUITY_KEEP_DAYS) -> None:
+    """Record an equity snapshot, advance the high-water mark, prune old rows."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=keep_days)).isoformat()
+    with _LOCK:
+        _db().execute(
+            "INSERT INTO equity_snap (ts, equity) VALUES (?, ?) "
+            "ON CONFLICT(ts) DO UPDATE SET equity = excluded.equity",
+            (now.isoformat(), equity),
+        )
+        _db().execute("DELETE FROM equity_snap WHERE ts < ?", (cutoff,))
+        hwm = kv_get("equity_hwm")  # reentrant: still inside _LOCK
+        if hwm is None or equity > float(hwm):
+            kv_set("equity_hwm", repr(equity))
+            kv_set("equity_hwm_ts", now.isoformat())
+        _db().commit()
+
+
+def equity_hwm() -> tuple[float, str | None] | None:
+    """(high_water, ts) or None when no snapshot has ever been taken."""
+    with _LOCK:
+        hwm = kv_get("equity_hwm")
+        return (float(hwm), kv_get("equity_hwm_ts")) if hwm is not None else None
+
+
+def equity_snaps(limit: int = 500) -> list[dict]:
+    """Recent equity snapshots, newest first."""
+    with _LOCK:
+        rows = _db().execute(
+            "SELECT ts, equity FROM equity_snap ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
 def add_report(title: str, body: str, kind: str = "info") -> dict:
     """Persist one report (markdown body). Returns the stored row."""

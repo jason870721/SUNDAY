@@ -35,6 +35,7 @@ class Realtime:
         self.alerts = AlertEngine()
         self._tasks: list[asyncio.Task] = []
         self._stopping = False
+        self._last_equity_snap: float | None = None  # time.monotonic() of the last snapshot
 
     # -- lifecycle --------------------------------------------------------
     async def start(self) -> None:
@@ -81,6 +82,25 @@ class Realtime:
             self.monitor.refresh_book()        # positions -> monitor evaluation
         self.alerts.refresh()                  # reload active alerts
         self._rest_alert_sweep()               # backstop: evaluate alerts off REST
+        self._maybe_snap_equity()              # drawdown high-water mark (throttled)
+
+    def _maybe_snap_equity(self) -> None:
+        """Record account equity at most every `equity_snap_sec` so /api/account/drawdown
+        has a high-water mark to compare against. Best-effort — never breaks the cycle."""
+        import time
+        if not settings.binance_testnet_key:
+            return
+        now = time.monotonic()
+        if self._last_equity_snap is not None and now - self._last_equity_snap < settings.equity_snap_sec:
+            return
+        from . import exchange, store
+        try:
+            eq = exchange.fetch_account().get("totalMarginBalance")
+            if eq is not None:
+                store.add_equity_snap(float(eq))
+                self._last_equity_snap = now
+        except Exception as e:
+            log.debug("equity snap: %s", e)
 
     def _rest_alert_sweep(self) -> None:
         from . import exchange
