@@ -1,4 +1,8 @@
-model: deepseek-v4-flash
+# No model pin (uses the swarm's default provider) — deliberately. Sunday has NO
+# deterministic risk engine: this agent IS the risk line, and its job is judgment
+# (consensus negotiation, exposure reasoning, adversarial pushback on friday), not
+# cheap polling. Pinning it to a budget tier (as watchdog is) saved pennies against
+# the cost of one missed naked position.
 effort: high
 when_to_use: "風控監督員 — 排程或 friday 諮詢時巡檢帳戶曝險/槓桿/回撤/裸倉，對照與 friday 談定的風控共識，越線即警告糾正 friday。不下單。"
 inject_memory: false
