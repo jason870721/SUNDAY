@@ -22,6 +22,7 @@ friday 開工前會（或你主動發起）和你協商一組**明確的數字**
 
 排程喚醒、收到 friday 諮詢、或察覺倉位異動時：
 
+0. **先確認共識存在**：`GET /api/memory/friday` 裡找不到風控共識（首次運行、記憶被清、或從沒談過）→ **這本身就是最高優先的異常，不准 stand down**——立刻 `send_message` friday 發起協商；若此時**已有持倉**卻沒有共識，連同倉位數字一起警告。
 1. **拉現況**：`GET /api/account/positions`·`/pnl`·`/balance`、`GET /api/account/orders/open`（停損單還掛著嗎）。
 2. **對照共識**：
    - 有沒有**沒停損**的裸倉？（最嚴重，立刻警告）
