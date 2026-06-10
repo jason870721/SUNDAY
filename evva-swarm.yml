@@ -18,7 +18,7 @@ leader:
   agent: friday
   schedule:
     cron: "*/30 * * * *"
-    prompt: "例行巡檢（非輪詢）：先 GET /api/memory/friday 回顧風控共識與持倉理由，GET /api/account/positions·/pnl 看現況（停損都還在嗎），然後自主行動，結束前檢查組員的 tasks 是否需要修改．或直接 stand down；有更新就收工前 PUT /api/memory/friday 寫回。"
+    prompt: "例行巡檢（非輪詢）：先 GET /api/memory/friday 回顧風控共識與持倉理由，GET /api/account/positions·/pnl 看現況（停損都還在嗎），順手 GET /api/alerts?status=active 清掉不再需要的提醒（DELETE /api/alerts/{id}），然後自主行動，結束前檢查組員的 tasks 是否需要修改．或直接 stand down；有更新就收工前 PUT /api/memory/friday 寫回。"
 
 workers:
   - agent: analyst-flow
@@ -39,11 +39,11 @@ workers:
       prompt: "風控巡檢：GET /api/account/positions·/pnl·/orders/open，對照與 friday 談定的風控共識（單筆/總曝險/槓桿/回撤/單一標的上限）——有沒有沒停損的裸倉？超標？逼近回撤上限？高相關標的同向集中？違規或逼近就 send_message 警告 friday（哪條越線 + 具體數字 + 建議動作）。沒事就一句 stand down。"
   - agent: reviewer
     schedule:
-      cron: "0 0 * * *" # 00:00 daily (was "0 24" — hour 24 is out of cron range 0-23 and broke manifest load)
+      cron: "0 0 * * *" # 00:00 daily, host TZ (was "0 24" — hour 24 is out of cron range 0-23 and broke manifest load)
       prompt: "當日復盤：GET /api/account/trades·/orders·/positions·/pnl，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、對 10% 月目標進度），把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條，並討論需不需要改善調整。"
   - agent: watchdog          # cheap DeepSeek-flash watchdog — every 3 min, read-only health + Top10 volatility
     schedule:
-      cron: "*/2 * * * *" # 2 mins
+      cron: "*/3 * * * *" # 3 mins — keep in sync with the "every 3 min" wording in profile.yml / system_prompt.md / friday's roster
       prompt: "例行看門狗巡檢：1. GET /health 確認 Sunday 活著；2. GET /api/markets?sort=volume&page=1&page_size=10 比對上次看 Top10 有無急拉急殺（任一 ≥3% 或 24h% 跳動 ≥5pp）/ 名單洗牌。只有發現異常才 send_message friday（指出哪項、哪標的、變多少）；都正常就直接收工、不發訊息。"
 
 settings:
