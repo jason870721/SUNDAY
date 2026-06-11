@@ -14,7 +14,6 @@ Three pure helpers (stdlib, unit-tested, also used by /api/account):
 from __future__ import annotations
 
 import logging
-import math
 import threading
 from typing import Callable
 
@@ -63,11 +62,14 @@ def derived_roi(entry: float | None, qty_signed: float | None,
 
 
 def bucket(roi_pct: float, step_pct: float) -> int:
-    """Which step the ROI falls in (step 5 → … −1, 0, 1, 2 …). The monitor fires when
-    this integer changes for a position, i.e. each `step_pct` move."""
+    """Which ±step band the ROI sits in: (−step, +step) → 0 (one break-even band),
+    [+step, +2·step) → 1, (−2·step, −step] → −1, … The monitor fires when this
+    integer changes. Truncation toward zero on purpose: floor() made 0 itself a band
+    edge, so ±0.0x% sign noise on a fresh position flapped buckets 0/−1 and pushed a
+    webhook on every mark tick around break-even (PRD-004)."""
     if step_pct <= 0:
         return 0
-    return int(math.floor(roi_pct / step_pct))
+    return int(roi_pct / step_pct)
 
 
 class Monitor:
@@ -116,11 +118,17 @@ class Monitor:
                 lev = _f(p.get("leverage"))
                 notional = abs(amt) * (mark or 0.0)
                 margin = (notional / lev) if (lev and notional) else None
+                prev = self.book.get(sym)
                 self.book[sym] = {"side": "long" if amt > 0 else "short", "entry": entry,
-                                  "qty": amt, "margin": margin, "mark": mark}
+                                  "qty": amt, "margin": margin, "mark": mark, "lev": lev}
                 seen.add(sym)
-                if sym not in self.buckets:
-                    roi, _ = derived_roi(entry, self.book[sym]["qty"], margin, mark)
+                # A bucket baseline belongs to ONE position. Re-seed silently when the
+                # identity under the symbol changed (closed+reopened, resized, or
+                # re-levered between polls) — comparing the fresh ROI against the old
+                # position's bucket fabricates a crossing (PRD-004's "+0.00%" webhook).
+                if sym not in self.buckets or prev is None or \
+                        (prev.get("entry"), prev.get("qty"), prev.get("lev")) != (entry, amt, lev):
+                    roi, _ = derived_roi(entry, amt, margin, mark)
                     self.buckets[sym] = bucket(roi, self._step()) if roi is not None else 0
             for sym in list(self.book.keys()):
                 if sym not in seen:

@@ -38,3 +38,24 @@
 - **token 效率**：每次無意義喚醒消耗全隊 token 預算，省下的 token 可以分給 researcher 做更深的探索。
 
 — friday, 2026-06-11
+
+---
+
+## 處置（已修復，2026-06-11）
+
+**Root cause（與推測略有不同）：** 比較基準確實是「上次跨階的 bucket」，但 `monitor.bucket()` 用
+`floor(roi/step)` 分階——**0 因此自己變成一條階梯邊界**（+0.03% → bucket 0、−0.03% → bucket −1）。
+新倉位的 ROI 必然貼著 0 震盪，每次正負翻轉都被當成「跨階」推一次。這也解釋了 log 裡每一則通知
+正負交替、|uPnL| 全部 < $0.25 的特徵。
+
+**修復內容（`monitor.py`，payload 與端點不變）：**
+
+1. `bucket()` 改截斷向零：**(−5%, +5%) 整段同屬 bucket 0**（損益打平帶），到達 ±5% 才算第一次
+   跨階，之後每 ±5% 一階（[5,10) → 1、(−10,−5] → −1 …）。在 ±5% 內怎麼震都是 0 則 webhook。
+2. 連帶修掉 log 中那筆 `ROI +0.00%` 的真兇：同 symbol 在輪詢間隔內平倉重開/改倉量/改槓桿時，
+   `refresh_book` 之前沿用**舊倉位的 bucket** 比對新倉位 ROI，會憑空製造一次「跨階」。現在
+   倉位身分（entry/qty/leverage）變了就靜默重置基準，只有 mark 真正推動的跨階才通報。
+
+**驗證：** `tests/test_monitor.py` 新增 PRD-004 實況重播（0.064 BTC short @ 62,843，餵入 log 中
+7 個 mark，斷言 0 則通知）+ 邊界/回落測試；`tests/test_monitor_refresh.py` 覆蓋重開倉/改槓桿
+重置。全套 141 綠。Standing Rule #2/#3 依賴的 +5%/+10%/+20% 跨階通知行為不變。
