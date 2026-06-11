@@ -7,6 +7,11 @@
 # evva swarm runtime state (created by `evva swarm .`)
 .vero/
 
+# per-member native long-term memory (evva wave-5 RP-25) — runtime state written by
+# the agents themselves beside their personas; never commit
+agents/main/*/memory/
+agents/sub/*/memory/
+
 # watchdog agent's last-Top10 snapshot (runtime comparison state)
 .watchdog-markets.json
 

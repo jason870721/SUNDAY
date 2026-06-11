@@ -1,11 +1,11 @@
-# Swarm tools（send_message, list_members, my_tasks, task_get, alarm_set/clear）
-# 由 worker 角色自動注入——不要列（也不要列 solo 版 alarm_create/list/cancel）。
+# Swarm tools（send_message, list_members, my_tasks, task_get, task_propose,
+# alarm_set/clear）由 worker 角色自動注入——不要列（也不要列 solo 版
+# alarm_create/list/cancel）。tool_search 隨 deferr.yml 由框架自動掛（RP-19）。
 - web_search    # 任意探索：美股新聞 / 區塊鏈大小事 / 鏈上新協議 / 美國政府動態 — 研究員主場
 - web_fetch
-- http_request  # 對照 Sunday：/api/markets、/api/indices；記憶倉庫 /api/memory/researcher
+- http_request  # 對照 Sunday：/api/markets、/api/indices；發布研究日誌 /api/memory/researcher
 - todo_write    # 每次醒來的探索計畫（領域/線索逐項推進，被打斷可續）
 - skill
-- read          # 讀 docs/prd 票
-- write         # 開 docs/prd/PRD-*.md
-- tool_search   # 需要時載入深櫃工具（json_query）
-- repl
+- read          # 讀 docs/prd 票、隊友記憶目錄
+- write         # 原生記憶檔（active 才解鎖 RP-25 記憶協議）+ 開 prd 票
+- repl          # 探索中的小型數據驗證（operator 已提前轉正）

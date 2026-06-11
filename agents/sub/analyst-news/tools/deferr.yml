@@ -1,2 +1,2 @@
-# Deferred — advertised in the system prompt's 工具櫃 (the harness doesn't list these).
+# Deferred — the framework advertises these names and auto-adds tool_search (RP-19).
 - json_query  # pluck fields from large JSON responses

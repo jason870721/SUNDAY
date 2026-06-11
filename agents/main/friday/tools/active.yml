@@ -1,14 +1,14 @@
 # Regular evva tools only. Swarm tools (task_create/assign/update_status/verify,
-# task_list, send_message, list_members, schedule_set/clear, alarm_set/clear) are
-# injected automatically by the leader role — do NOT list them here. In particular
-# do NOT list the solo alarm_create/list/cancel: swarm members use alarm_set/clear
-# (durable bus delivery, shows in list_members ⏰, leader can target teammates).
+# task_list, proposal_list/accept/decline, send_message, list_members,
+# schedule_set/clear, alarm_set/clear, skill_publish) are injected automatically
+# by the leader role — do NOT list them here. In particular do NOT list the solo
+# alarm_create/list/cancel: swarm members use alarm_set/clear.
+# tool_search is auto-added by the framework when deferr.yml is non-empty (RP-19).
 - http_request  # operate Sunday (/api/account, /api/markets, /api/alerts, /api/memory, /api/reports…)
 - todo_write    # plan multi-step command work (renegotiate→write back→broadcast→retune) instead of head-tracking
 - calc          # sizing / exposure / target arithmetic before it goes into a ticket
 - web_search    # quick verification of teammate claims / breaking news (deep research is delegated)
 - bash          # ONLY to restart Sunday per RUNBOOK.md when /health is down
-- read          # docs/prd tickets, RUNBOOK
-- write         # file docs/prd/PRD-*.md
+- read          # docs/prd tickets, RUNBOOK, teammates' memory dirs
+- write         # native memory files + docs/prd tickets (active: unlocks the RP-25 memory protocol)
 - skill         # (auto-added by the swarm; listed for clarity)
-- tool_search   # load deferred tools below on demand

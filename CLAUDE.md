@@ -89,6 +89,9 @@ engine/sunday/
   protection 風控數學與 equity 快照測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
 - swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 7 workers）採**決策/執行分離**：
   friday = 指揮官/PM（order ticket + 調度 + 驗收），trader = 執行台（下單/管倉/對帳；
-  `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）；每個 agent 都有
-  main_agent 級 system prompt + 角色化工具櫃（active + deferr，深櫃工具靠 tool_search 載入）。
+  `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）。
+- **已對齊 evva 第五波（RP-19~28）**：工具教學/deferred 公告/injection 防線/記憶協議由框架
+  注入，persona 只寫人設與行規；成員私人記憶原生化（`agents/…/<name>/memory/`，已 gitignore），
+  `/api/memory` 收斂為兩塊公告板（friday 憲法 + researcher 研究日誌）；risk-monitor 用
+  `task_propose` 把缺陷修復放上看板；共享 skills 在 `agents/skills/`（friday 可 `skill_publish`）。
   系統協作全景見 [docs/workflow.md](docs/workflow.md)。

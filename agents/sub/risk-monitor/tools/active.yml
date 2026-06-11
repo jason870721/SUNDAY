@@ -1,10 +1,9 @@
 # Regular evva tools only. Swarm tools (send_message, list_members, my_tasks,
-# task_get, alarm_set/clear) are injected automatically by the worker role — do
-# NOT list them, nor the solo alarm_create/list/cancel (escalation re-check alarms
-# use the injected alarm_set).
+# task_get, task_propose, alarm_set/clear) are injected automatically by the
+# worker role — do NOT list them, nor the solo alarm_create/list/cancel.
+# tool_search is auto-added by the framework when deferr.yml is non-empty (RP-19).
 - http_request  # read Sunday's account state (/api/account/*; read-only, no trading)
 - calc          # consensus math (exposure sums, equity-% caps) — warning numbers are never mental math
 - skill
-- read          # docs/prd tickets
-- write         # file docs/prd/PRD-*.md; keep the consensus mirror via /api/memory instead
-- tool_search   # load deferred tools (repl / json_query) on demand
+- read          # docs/prd tickets, teammates' memory dirs
+- write         # native memory files (active: unlocks RP-25 — the consensus mirror lives there) + prd tickets

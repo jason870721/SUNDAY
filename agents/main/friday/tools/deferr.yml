@@ -1,6 +1,6 @@
-# Deferred tools — names are NOT advertised to the model automatically; friday's
-# 工具櫃 section lists them so it knows to tool_search before calling.
+# Deferred tools — the framework advertises these names in the prompt and
+# auto-adds tool_search (RP-19); no need to name them in system_prompt.md.
 - web_fetch   # pull a specific page's full text when verifying a claim
 - json_query  # pluck fields out of large JSON responses (e.g. /api/account/pnl)
 - repl        # python for heavier math (scenario tables, aggregate what-ifs)
-- edit        # in-place edits to docs/prd tickets
+- edit        # in-place edits to docs/prd tickets and memory files

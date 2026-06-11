@@ -107,7 +107,7 @@
 | **researcher** | **8h** cron（00:00 / 08:00 / 16:00）/ friday 指派課題 | **戰略**前瞻：四領域（美股新聞 / 區塊鏈 / 鏈上新協議 / 美政府動態）任意探索 → 對照 `/api/markets`·`/api/indices` 收斂成 1–3 個可交易新方向 → 餵 friday；線索累積在 `/api/memory/researcher` | 不下單；無夠格發現就明說 |
 | **risk-monitor** | **1h** cron | 風控巡檢：`/api/account/pnl`·`/drawdown`·`/balance` 對照 friday↔risk 共識（裸倉？超標？高相關集中？）→ 決策越線警告 friday、機械缺陷（裸倉/孤兒掛單）點名 trader 修復；連兩次未處理 `POST /api/reports` 升級 User | **只觀察只建議**，沒有交易職權 |
 | **reviewer** | 每日 **00:00** cron（時區跟著 evva 主機） | 當日復盤：`/api/account/trades`·`/orders`·`/pnl`（repl 算命中率/賺賠比）歸因賺賠與 10% 月目標進度，**決策（friday）與執行（trader）分開歸因** → `POST /api/journal`（User 在 dashboard Journal 分頁讀）+ 重點回報 friday 並追蹤落實 | 不下單 |
-| **watchdog** | **3m** cron（pin 在廉價模型） | 看門狗：`GET /health` + Top10 市場急拉急殺比對（快照存 `{workdir}/.watchdog-markets.json`）→ **只在異常時**通知 friday，正常就靜默收工 | 不分析、不研究、無 memory |
+| **watchdog** | **5m** cron（pin 在廉價模型） | 看門狗：`GET /health` + Top10 市場急拉急殺比對（快照存 `{workdir}/.watchdog-markets.json`）→ **只在異常時**通知 friday，正常就靜默收工 | 不分析、不研究、無 memory |
 
 **協作管道**：`send_message`（叫醒對方；`to:"all"` 廣播、`ref_task` 關聯課題）、task 面板
 （`task_create`/`task_assign` 派課題 → 交付進 verifying → friday `task_verify` 驗收或退件）、
@@ -126,7 +126,7 @@ runtime 改任何 worker 的 cron 與指令——他的方向盤；動之前先 
 | 帳戶 | `GET /api/account/positions`·`/balance`·`/pnl`·`/drawdown`·`/orders/open`·`/orders`·`/trades` | 倉位（含 TP/SL protection 旗標、清算距離）/ 權益 / 損益與曝險聚合 / 回撤 vs 高水位 / 訂單與成交史 |
 | 外部指數 | `GET /api/indices`·`/{key}` | 恐懼貪婪、BTC dominance、VIX、DXY、美股、美債、黃金（TTL 快取） |
 | 提醒/監控 | `POST·GET·DELETE /api/alerts` · `GET /api/monitor`·`POST /config` | 價格提醒（觸發一次）/ 倉位 ROI 監控開關與步長 |
-| 協作狀態 | `GET·PUT /api/memory/{agent}` · `POST·GET /api/journal` · `POST·GET /api/reports` | agent 長期記憶（6 個 agent 各一份 markdown）/ reviewer 日誌 / friday→User 快訊 |
+| 協作狀態 | `GET·PUT /api/memory/{friday,researcher}` · `POST·GET /api/journal` · `POST·GET /api/reports` | 公告板：friday 憲法 + researcher 研究日誌（agent 私人工作記憶已原生化進 evva）/ reviewer 日誌 / friday→User 快訊 |
 | 系統 | `GET /health` · `GET /api/system/time` · `GET /manual` · `/dashboard` | 活性 / 時間時區錨點 / agent 手冊 / User 介面 |
 
 慣例：回大量資料的 list 一律分頁信封 `{items, page, page_size, total, has_more}`；全部免 token。
@@ -183,9 +183,9 @@ runtime 改任何 worker 的 cron 與指令——他的方向盤；動之前先 
 
 | 儲存 | 寫 | 讀 | 用途 |
 | --- | --- | --- | --- |
-| `/api/memory/friday` | friday | friday（每次醒來）、trader（pre-flight 共識）、risk-monitor（對照共識） | 風控共識、持倉理由、教訓、watchlist |
-| `/api/memory/trader` | trader | 自己 + friday | standing rules 快取、在途事項、執行教訓 |
-| `/api/memory/<worker>` | 各 worker | 自己 + friday（如 `memory/researcher`） | 線索接續、對照副本 |
+| `/api/memory/friday`（憲法公告板） | friday | friday（每次醒來）、trader（pre-flight 共識）、risk-monitor（對照共識）、analyst（watchlist）、User | 風控共識、watchlist、持倉理由、standing rules |
+| `/api/memory/researcher`（研究日誌） | researcher | friday、User | 標日期的線索與 idea、已交付記錄 |
+| `agents/{main,sub}/<name>/memory/`（evva 原生，RP-25） | 各成員（只能寫自己的） | 自己（醒來自動帶索引）+ 隊友可 `read` | 私人工作記憶：教訓、校準、對照副本、在途事項 |
 | `/api/journal` | reviewer（每日） | User（dashboard） | 復盤日誌 |
 | `/api/reports` | friday（事件驅動）、risk-monitor（升級） | User（dashboard + Telegram） | 大賺 / 大賠 / 系統錯誤快訊 |
 | 訂單 `memo` | trader（隨單，抄 ticket 理由） | User（倉位查詢回顯） | 每一筆單的「為什麼」 |

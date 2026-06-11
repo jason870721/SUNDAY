@@ -1,13 +1,18 @@
-"""/api/memory — the agent memory warehouse (replaces the file-based MEMORY.md / RESEARCH.md).
+"""/api/memory — the team's PUBLICATION boards (User-facing, read by teammates over HTTP).
 
-Each agent keeps ONE long-term markdown doc here. The pattern, baked into every (non-watchdog)
-agent's system prompt: read your doc on wake (``GET /api/memory/{agent}``), then overwrite it at
-session end (``PUT /api/memory/{agent}``). Reads are open to any roster agent, so e.g. an analyst
-can peek friday's watchlist/consensus. Token-free like the rest of the proxy.
+Since evva wave-5 (RP-25) every swarm member keeps its private working memory natively in
+evva (``agents/{main,sub}/<name>/memory/``); this endpoint is no longer a per-agent warehouse.
+What remains here are the two docs that are deliberately PUBLISHED — cross-agent contracts the
+User also reads on the dashboard Memory tab:
 
-``AGENTS`` is the swarm's memory-bearing roster (watchdog has none). Pinning it keeps the
-dashboard index deterministic (every agent shows, even empty) and rejects typo'd names so the
-store can't accumulate junk rows.
+- ``friday``     — the team constitution: risk consensus, watchlist, position theses, standing
+                   rules. trader pre-flights against it, risk-monitor patrols against it.
+- ``researcher`` — the research log: dated leads/ideas the User and friday browse.
+
+Pattern unchanged: ``GET`` the whole doc, edit, ``PUT`` it back (whole-doc overwrite).
+
+``AGENTS`` pins the publishing roster: the dashboard index stays deterministic and typo'd
+names are rejected so the store can't accumulate junk rows.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from .. import store
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
-AGENTS = ("friday", "trader", "analyst-flow", "analyst-news", "researcher", "risk-monitor", "reviewer")
+AGENTS = ("friday", "researcher")
 
 
 class MemoryReq(BaseModel):

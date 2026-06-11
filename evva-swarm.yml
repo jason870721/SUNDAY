@@ -31,13 +31,13 @@ leader:
   budget_tokens: -1        # never freeze the commander (workers stay capped; runs are bounded by stall_hard_timeout)
   schedule:
     cron: "*/30 * * * *"
-    prompt: "指揮官例行巡檢（協調為主，非看盤輪詢）：① GET /api/memory/friday 回顧共識/持倉理由/未了結事項；② GET /api/account/positions·/pnl 快速對帳（保護腿都在嗎、曝險如何）；③ task_list 盤點看板——卡在 running 的課題要不要催（send_message 帶 ref_task）、verifying 的逐一查證後 task_verify（不合格退件寫清楚缺什麼）；④ list_members 看儀表板——誰忙誰閒、token 燒太兇的讓他歇、排程節奏不對就 schedule_set 調（記錄改了誰為什麼）；⑤ GET /api/alerts?status=active 清掉不再需要的提醒；⑥ 有未閉環的隊友回報就回掉（採納/不採納+理由）。有更新收工前 PUT /api/memory/friday 寫回；都正常就一句 stand down。"
+    prompt: "指揮官例行巡檢（協調為主，非看盤輪詢）：① GET /api/memory/friday 回顧憲法（共識/watchlist/持倉理由）；② GET /api/account/positions·/pnl 快速對帳（保護腿都在嗎、曝險如何）；③ task_list + proposal_list 盤點看板——卡在 running 的課題要不要催（send_message 帶 ref_task）、verifying 的逐一查證後 task_verify（不合格退件寫清楚缺什麼）、open 的提案逐一裁決（proposal_accept 或 proposal_decline 附理由）；④ list_members 看儀表板——誰忙誰閒、token 燒太兇的讓他歇、排程節奏不對就 schedule_set 調（改動會持久化，記下何時調回來）；⑤ GET /api/alerts?status=active 清掉不再需要的提醒；⑥ 有未閉環的隊友回報就回掉（採納/不採納+理由）。憲法有變就 PUT /api/memory/friday 寫回、私人教訓寫進自己的記憶目錄；都正常就一句 stand down。"
 
 workers:
   - agent: trader
     schedule:
       cron: "15,45 * * * *" # staggered vs friday's :00/:30 patrol — execution hygiene, not market polling
-      prompt: "執行台例行巡檢（保護腿完整性，非行情輪詢）：① GET /api/memory/trader 看 standing rules 與在途事項；② GET /api/account/positions 驗每倉 protection——stop_loss:false 或 sl_qty_covers:false 立刻補齊（修復後回報 friday 與 risk-monitor）、null 就去 /api/account/orders/open 確認；③ 對照 /api/account/orders/open 撤掉已平倉標的的孤兒 TP/SL 掛單；④ my_tasks 看有沒有 friday 的新 ticket 或未完成的執行；⑤ standing rules 觸發條件成立的照規則執行並回報。有更新收工前 PUT /api/memory/trader 寫回；都正常就一句 stand down。"
+      prompt: "執行台例行巡檢（保護腿完整性，非行情輪詢）：① 看記憶索引接上 standing rules 與在途事項（standing rules 的權威版在 GET /api/memory/friday 的憲法）；② GET /api/account/positions 驗每倉 protection——stop_loss:false 或 sl_qty_covers:false 立刻補齊（修復後回報 friday 與 risk-monitor）、null 就去 /api/account/orders/open 確認；③ 對照 /api/account/orders/open 撤掉已平倉標的的孤兒 TP/SL 掛單；④ my_tasks 看有沒有 friday 的新 ticket 或未完成的執行；⑤ standing rules 觸發條件成立的照規則執行並回報。在途事項或教訓有變就更新自己的記憶目錄；都正常就一句 stand down。"
   - agent: analyst-flow
     schedule:
       cron: "*/10 * * * *" # every 10 mins
@@ -54,14 +54,14 @@ workers:
     budget_tokens: -1        # the brake line is never frozen by the daily budget breaker
     schedule:
       cron: "0 * * * *" # every hr
-      prompt: "風控巡檢：先 GET /api/memory/friday 確認風控共識存在（沒有 = 最高優先異常，立刻找 friday 協商、不准 stand down）；GET /api/account/pnl（exposure_pct + 每倉 protection/liq_distance_pct）·/drawdown·/balance，對照共識（單筆/總曝險/槓桿/回撤/單一標的/可用餘額下限）——protection 顯示裸倉或半裸？超標？drawdown_pct 逼頂？free 逼近下限？高相關標的同向集中？機械缺陷（裸倉/孤兒掛單）點名 trader 修復（CC friday），決策越線警告 friday（哪條越線 + 具體數字 + 建議動作）；嚴重的設 alarm 回查、連兩次未處理就 POST /api/reports 升級給 User。沒事就一句 stand down。"
+      prompt: "風控巡檢：先 GET /api/memory/friday 確認風控共識存在（沒有 = 最高優先異常，立刻找 friday 協商、不准 stand down）；GET /api/account/pnl（exposure_pct + 每倉 protection/liq_distance_pct）·/drawdown·/balance，對照共識（單筆/總曝險/槓桿/回撤/單一標的/可用餘額下限）——protection 顯示裸倉或半裸？超標？drawdown_pct 逼頂？free 逼近下限？高相關標的同向集中？緊急機械缺陷（裸倉）直接訊息 trader 立即修復（CC friday）；非緊急但該追蹤驗收的缺陷（孤兒掛單清理、半裸補齊）用 task_propose 開提案（suggested_assignee: trader）；決策越線警告 friday（哪條越線 + 具體數字 + 建議動作）；嚴重的設 alarm 回查、連兩次未處理就 POST /api/reports 升級給 User。告警與追蹤記錄更新進自己的記憶目錄；沒事就一句 stand down。"
   - agent: reviewer
     schedule:
       cron: "0 0 * * *" # 00:00 daily, host TZ
-      prompt: "當日復盤：GET /api/account/trades·/orders·/positions·/pnl·/drawdown（分頁翻完）+ GET /api/memory/friday·/reviewer，用 repl 算命中率/平均賺賠/對 10% 月目標進度，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、決策錯還是執行錯——friday 與 trader 分開歸因），追蹤上次建議有沒有真的改變行為，把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條建議，討論需不需要改善調整。收工前 PUT /api/memory/reviewer 更新 playbook。"
-  - agent: watchdog          # cheap DeepSeek-flash watchdog — every 3 min, read-only health + Top10 volatility
+      prompt: "當日復盤：GET /api/account/trades·/orders·/positions·/pnl·/drawdown（分頁翻完）+ GET /api/memory/friday（憲法與持倉理由）+ 自己記憶目錄裡的 playbook（上次建議），用 repl 算命中率/平均賺賠/對 10% 月目標進度，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、決策錯還是執行錯——friday 與 trader 分開歸因），追蹤上次建議有沒有真的改變行為，把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條建議，討論需不需要改善調整。收工前把 playbook 更新進自己的記憶目錄。"
+  - agent: watchdog          # cheap DeepSeek-flash watchdog — every 5 min, read-only health + Top10 volatility
     schedule:
-      cron: "*/5 * * * *" # 5 mins — keep in sync with the "every 3 min" wording in profile.yml / system_prompt.md / friday's roster
+      cron: "*/5 * * * *" # 5 mins — keep in sync with the "every 5 min" wording in profile.yml / system_prompt.md / friday's roster
       prompt: "例行看門狗巡檢：1. GET /health 確認 Sunday 活著；2. GET /api/markets?sort=volume&page=1&page_size=10 比對上次看 Top10 有無急拉急殺（任一 ≥3% 或 24h% 跳動 ≥5pp）/ 名單洗牌。只有發現異常才 send_message friday（指出哪項、哪標的、變多少）；都正常就直接收工、不發訊息。"
 
 settings:
@@ -72,5 +72,8 @@ settings:
   permission_mode: bypass
   max_iterations: 99
   # Operating fuses for an unattended 7×24 team (see the evva swarm guide §8):
-  daily_budget_tokens: -1        # per-member daily in+out cap; runaway protection, auto-unfreezes at local midnight
+  daily_budget_tokens: -1        # negative normalizes to 0 = UNLIMITED (operator choice); cap individual members via budget_tokens if needed
   stall_hard_timeout: "30m"      # a run busy >30m is cancelled (mail re-queued, nothing lost); stall warning stays at the 10m default
+  # Workflow watchdogs (wave-5 RP-22): nudge friday when the BOARD stalls (vs RP-14's run stalls).
+  task_stale_threshold: "12h"    # task sitting in running/verifying >12h → one nudge to friday (researcher's 8h wake cadence is the longest legit lag)
+  mailbox_stale_threshold: "30m" # unread mail older than 30m → operator alert (members wake on message; backlog = something is wrong)

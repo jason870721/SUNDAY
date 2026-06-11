@@ -1,5 +1,4 @@
-# Deferred tools — names are NOT advertised to the model automatically; the system
-# prompt's 工具櫃 section lists them so trader knows to tool_search before calling.
-- write       # file docs/prd/PRD-*.md tickets
+# Deferred tools — the framework advertises these names in the prompt and
+# auto-adds tool_search (RP-19); no need to name them in system_prompt.md.
 - json_query  # pluck fields out of large JSON responses
 - repl        # python for heavier execution math (slippage stats etc.)

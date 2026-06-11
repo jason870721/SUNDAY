@@ -1,10 +1,10 @@
-# Swarm tools (send_message, list_members, my_tasks, task_get, alarm_set/clear)
-# are injected by the worker role — do NOT list them (nor solo alarm_create/list/cancel).
+# Swarm tools (send_message, list_members, my_tasks, task_get, task_propose,
+# alarm_set/clear) are injected by the worker role — do NOT list them (nor solo
+# alarm_create/list/cancel). tool_search auto-added with deferr.yml (RP-19).
 - http_request  # read Sunday: /api/indices, /api/klines(+indicators), /api/funding, /api/markets
 - web_search    # market interpretation of funding / liquidations / momentum
 - web_fetch
 - calc          # price-level arithmetic (ATR stops, distances, funding annualization)
 - skill
-- read          # docs/prd tickets
-- write         # file docs/prd/PRD-*.md
-- tool_search   # load deferred tools (repl / json_query) on demand
+- read          # docs/prd tickets, teammates' memory dirs
+- write         # native memory files (active: unlocks RP-25) + prd tickets

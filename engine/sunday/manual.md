@@ -124,21 +124,24 @@ curl -s  "http://127.0.0.1:7777/api/journal/12"            # 單篇全文
 reviewer 每日把復盤 POST 到這裡存進 DB，User 在 dashboard 的 **Journal** 分頁讀；`body` 用 markdown、
 不限長度；`title` 最多 **200 字**（超過會被拒收 422）。
 
-## 長期記憶 `/api/memory`（每個 agent 的記憶倉庫，取代舊的 MEMORY.md / RESEARCH.md）
+## 公告板 `/api/memory`（發布給全隊與 User 的兩份文件）
 
-每個 agent 在 Sunday 存**一份**長期記憶 markdown 文件。慣例（已寫進各 agent 系統提示詞）：
-**醒來先讀自己的、收工前整份寫回。**
+每個 agent 的**私人工作記憶**現在原生存在 evva（各自的 `agents/…/<name>/memory/` 目錄，
+醒來自動帶索引）；這裡只放**刻意發布**的跨 agent 合約，User 在 dashboard **Memory** 分頁讀：
+
+- `friday` —— **團隊憲法**：風控共識、watchlist、持倉理由、standing rules。trader 下單前
+  pre-flight 對照、risk-monitor 巡檢對照、analyst 對齊 watchlist。
+- `researcher` —— **研究日誌**：標日期的線索與 idea，friday 與 User 回看。
 
 ```bash
-curl -s  http://127.0.0.1:7777/api/memory/friday                 # 讀某 agent 的記憶全文（無內容回空文件，不報錯）
+curl -s  http://127.0.0.1:7777/api/memory/friday                 # 讀全文（無內容回空文件，不報錯）
 curl -sX PUT http://127.0.0.1:7777/api/memory/friday \
-     -H 'Content-Type: application/json' -d '{"content":"# friday 記憶\n## 風控共識\n- ..."}'  # 整份覆寫
-curl -s  http://127.0.0.1:7777/api/memory                        # 索引：每個 agent 的 updated_at + size
+     -H 'Content-Type: application/json' -d '{"content":"# friday 憲法\n## 風控共識\n- ..."}'  # 整份覆寫
+curl -s  http://127.0.0.1:7777/api/memory                        # 索引：每份文件的 updated_at + size
 ```
 
-記憶是**覆寫式**的整份文件：`GET` 讀回 → 就地增刪 → `PUT` 整份寫回（保持精簡，過期的刪掉）。
-記憶 agent：`friday` `trader` `analyst-flow` `analyst-news` `researcher` `risk-monitor` `reviewer`（watchdog 無）。
-讀是開放的——例如 analyst 可 `GET /api/memory/friday` 參考他的 watchlist / 風控共識。
+文件是**覆寫式**：`GET` 讀回 → 就地增刪 → `PUT` 整份寫回（保持精簡，過期的刪掉）。
+讀對所有 agent 開放；只有 `friday` `researcher` 兩個名字可寫（其他名字 404）。
 
 ## 通報 `/api/reports`（friday → User 的重要通報）
 
