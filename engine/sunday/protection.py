@@ -39,6 +39,26 @@ def protection(qty: float | None, legs: list[dict]) -> dict:
     }
 
 
+def protection_detail(qty: float | None, legs: list[dict]) -> dict:
+    """One symbol's protection view for GET /api/perp/protection (PRD-003 §2b).
+
+    ``legs`` rows carry ``tp_sl`` (from ``classify_leg``) plus id / trigger_price /
+    status / amount / close_position / ts. ``take_profit`` / ``stop_loss`` surface the
+    *primary* leg of each kind — the newest by ``ts``, i.e. the latest intent — with
+    ladder counts so extra legs aren't hidden; coverage math reuses ``protection``."""
+    def newest(rows: list[dict]) -> dict | None:
+        return max(rows, key=lambda l: l.get("ts") or 0) if rows else None
+    tp = [l for l in legs if l.get("tp_sl") == "take_profit"]
+    sl = [l for l in legs if l.get("tp_sl") == "stop_loss"]
+    return {
+        "take_profit": newest(tp),
+        "stop_loss": newest(sl),
+        "tp_legs": len(tp),
+        "sl_legs": len(sl),
+        "sl_qty_covers": protection(qty, legs)["sl_qty_covers"],
+    }
+
+
 def liq_distance_pct(mark: float | None, liquidation: float | None) -> float | None:
     """How far (% of mark) the mark price sits from liquidation; None when unknown
     (e.g. cross positions report no per-position liquidation price)."""

@@ -97,8 +97,12 @@ def _order_row(o: dict, lev_by_symbol: dict | None = None) -> dict:
         "remaining": amount - filled,
         "status": (o.get("status") or "").lower(),
         "reduce_only": o.get("reduceOnly"),
+        "close_position": bool(o.get("closePosition")),
         "trigger_price": trig if trig else None,
         "tp_sl": _leg(typ),
+        # True = a conditional leg living in Binance's Algo Service (id is an algoId).
+        # DELETE /api/perp/order/{id} cancels either kind transparently.
+        "algo": bool(o.get("algo")),
         "leverage": (lev_by_symbol or {}).get(o.get("symbol")),
         "ts": o.get("time"),
         "client_order_id": o.get("clientOrderId"),

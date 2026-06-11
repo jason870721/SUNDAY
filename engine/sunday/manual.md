@@ -50,12 +50,36 @@ curl -sX POST http://127.0.0.1:7777/api/perp/leverage     -d '{"symbol":"BTCUSDT
 curl -sX POST http://127.0.0.1:7777/api/perp/margin-mode  -d '{"symbol":"BTCUSDT","mode":"cross"}'
 curl -sX POST http://127.0.0.1:7777/api/perp/close         -d '{"symbol":"BTCUSDT"}'   # reduce-only 平倉
 curl -sX DELETE "http://127.0.0.1:7777/api/perp/order/<id>?symbol=BTCUSDT"
-curl -sX DELETE "http://127.0.0.1:7777/api/perp/orders?symbol=BTCUSDT"                  # 撤該標所有掛單
+curl -sX DELETE "http://127.0.0.1:7777/api/perp/orders?symbol=BTCUSDT"                  # 撤該標所有掛單（含 TP/SL 腿）
 ```
 
 下單參數：`side` buy|sell · `type` market|limit · 大小用 `qty`（張數）或 `notional_usd`（USD，自動換算）·
 `leverage` / `margin_mode`(isolated 逐倉 | cross 全倉) 在進場前套用 · `take_profit`/`stop_loss` 為觸發價 ·
 `memo`（≤300 字）= 下單理由，記入帳本、在倉位查詢的 `memo` / `order` 欄回顯給 User。
+
+TP/SL 觸發腿是幣安的**條件單（algo）**，與一般掛單分屬兩本訂單簿：回應與訂單列表會帶 `algo: true`
+（其 id 為 algoId）。你不用管哪本——`orders/open` 兩本合併回傳，`DELETE /api/perp/order/<id>` 兩種 id
+都能撤。
+
+### 1a · 既有倉位的 TP/SL 管理 `/api/perp/protection`
+
+保護腿脫落（部分平倉、調倉、誤刪）時**補掛/改掛，不必重開倉**；也用來巡檢單一標的保護狀態：
+
+```bash
+# 查保護腿：主 TP/SL 腿（id / trigger_price / status）+ 階梯數 + SL 數量蓋不蓋得住倉位
+curl -s "http://127.0.0.1:7777/api/perp/protection?symbol=BTCUSDT"
+# → { "symbol":"BTCUSDT", "position":{"side":"long","qty":0.02,...} | null,
+#     "take_profit":{...}|null, "stop_loss":{...}|null, "tp_legs":1, "sl_legs":1, "sl_qty_covers":true }
+#   position 為 null 卻列得出腿 = 孤兒腿，撤掉它。
+
+# 為現有倉位補/改 TP/SL（null = 該腿不動）；新腿按目前倉量先掛上、舊同類腿才撤——換腿過程不裸奔
+curl -sX POST http://127.0.0.1:7777/api/perp/protection -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTCUSDT","take_profit":75000,"stop_loss":60000}'
+# → { "ok":true, "take_profit":{"id":"...","trigger_price":75000,...},
+#     "stop_loss":{...}, "replaced":["<舊腿id>", ...] }
+```
+
+無倉位時 POST 回 404（先用 `/api/perp/order` 開倉）；觸發價在錯誤一側（會立即觸發）回 400 並說明方向。
 
 ## 3 · 帳戶：倉位 / 損益 / 訂單 `/api/account`（測試網）
 
@@ -64,8 +88,8 @@ curl -s http://127.0.0.1:7777/api/account/positions        # 開倉 + 每倉 ROI
 curl -s http://127.0.0.1:7777/api/account/balance          # equity / free / used
 curl -s http://127.0.0.1:7777/api/account/pnl              # equity + 總未實現 + 曝險聚合 + 每倉拆解
 curl -s http://127.0.0.1:7777/api/account/drawdown         # 權益 vs 高水位（回撤 %，引擎自動快照）
-curl -s "http://127.0.0.1:7777/api/account/orders/open?page=1"          # 掛單（可加 &symbol=）
-curl -s "http://127.0.0.1:7777/api/account/orders?symbol=BTCUSDT"       # 歷史訂單（需 symbol，分頁）
+curl -s "http://127.0.0.1:7777/api/account/orders/open?page=1"          # 掛單（可加 &symbol=；含未觸發 TP/SL 腿）
+curl -s "http://127.0.0.1:7777/api/account/orders?symbol=BTCUSDT"       # 歷史訂單（需 symbol，分頁；含條件單歷史）
 curl -s "http://127.0.0.1:7777/api/account/trades?symbol=BTCUSDT"       # 成交（含 realized PnL，分頁）
 ```
 

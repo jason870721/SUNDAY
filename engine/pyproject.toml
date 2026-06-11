@@ -7,7 +7,8 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pydantic-settings>=2.2",
-    "ccxt>=4.3",
+    "ccxt>=4.5.57",   # ≥4.5: routes USDⓈ-M conditional orders via Binance's Algo Service
+                      # (post 2025-12-09 the legacy order endpoint rejects them with -4120)
     "websockets>=12.0",
     "certifi>=2024.2.2",          # CA bundle for the indices HTTPS feeds (urllib)
 ]

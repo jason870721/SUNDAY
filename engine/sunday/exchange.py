@@ -25,6 +25,7 @@ import urllib.request
 
 import ccxt
 
+from . import algoorders
 from .config import settings
 
 _market: ccxt.binanceusdm | None = None
@@ -307,13 +308,35 @@ def leverage_by_symbol() -> dict[str, int]:
     return out
 
 
+def fetch_open_algo_orders(symbol: str | None = None) -> list[dict]:
+    """Untriggered conditional (TP/SL/trailing) legs from the Algo Service, reshaped to
+    the legacy openOrders row shape with ``algo: True`` (see algoorders.py)."""
+    rows = _signed("/fapi/v1/openAlgoOrders", {"symbol": symbol.upper()} if symbol else None)
+    return [algoorders.normalize_algo_order(a) for a in rows]
+
+
 def fetch_open_orders(symbol: str | None = None) -> list[dict]:
-    return _signed("/fapi/v1/openOrders", {"symbol": symbol.upper()} if symbol else None)
+    """Open orders = regular book + untriggered conditional legs. Since Binance's
+    2025-12-09 Algo-Service migration, /fapi/v1/openOrders alone misses TP/SL legs —
+    a failure on either read raises (a silent partial list would re-create the
+    false-naked-position bug this merge fixes, PRD-003)."""
+    plain = _signed("/fapi/v1/openOrders", {"symbol": symbol.upper()} if symbol else None)
+    return plain + fetch_open_algo_orders(symbol)
 
 
 def fetch_orders(symbol: str, since: int | None = None, limit: int = 100) -> list[dict]:
-    """Order history (Binance fapi requires a symbol)."""
-    return _signed("/fapi/v1/allOrders", {"symbol": symbol.upper(), "startTime": since, "limit": min(limit, 1000)})
+    """Order history (Binance fapi requires a symbol), merged across both books.
+
+    /fapi/v1/allAlgoOrders rejects startTime windows ≥ 7 days, so ``since`` is applied
+    locally to the algo rows instead (their lookback is bounded by ``limit``); the
+    regular book keeps server-side startTime. Rows stay ascending by time."""
+    lim = min(limit, 1000)
+    plain = _signed("/fapi/v1/allOrders", {"symbol": symbol.upper(), "startTime": since, "limit": lim})
+    algo = [algoorders.normalize_algo_order(a) for a in
+            _signed("/fapi/v1/allAlgoOrders", {"symbol": symbol.upper(), "limit": lim})]
+    if since:
+        algo = [a for a in algo if (a.get("time") or 0) >= since]
+    return sorted(plain + algo, key=lambda o: o.get("time") or 0)
 
 
 def fetch_my_trades(symbol: str, since: int | None = None, limit: int = 100) -> list[dict]:
@@ -361,12 +384,29 @@ def place_stop(symbol: str, close_side: str, qty: float, trigger_price: float,
     )
 
 
-def cancel_order(order_id: str, symbol: str) -> dict:
-    return trade_ex().cancel_order(order_id, unify_trade(symbol))
+def cancel_order(order_id: str, symbol: str, algo: bool = False) -> dict:
+    """Cancel one order in whichever book holds it. TP/SL legs live in the Algo Service
+    (id = algoId): pass ``algo=True`` to go there directly, otherwise a regular-book
+    -2011 (unknown order) transparently retries against the algo book — so agents can
+    cancel any id from /api/account/orders/open without caring which book it sits in."""
+    sym = unify_trade(symbol)
+    if algo:
+        return trade_ex().cancel_order(order_id, sym, params={"trigger": True})
+    try:
+        return trade_ex().cancel_order(order_id, sym)
+    except Exception as e:
+        if not algoorders.is_unknown_order(str(e)):
+            raise
+        return trade_ex().cancel_order(order_id, sym, params={"trigger": True})
 
 
 def cancel_all_orders(symbol: str) -> None:
-    trade_ex().cancel_all_orders(unify_trade(symbol))
+    """Cancel a symbol's resting orders in BOTH books — regular and algo. Clearing only
+    the regular book strands TP/SL legs as orphans that block margin-mode changes
+    with -4047 (PRD-003)."""
+    sym = unify_trade(symbol)
+    trade_ex().cancel_all_orders(sym)
+    trade_ex().cancel_all_orders(sym, params={"trigger": True})
 
 
 def close_position(symbol: str) -> dict | None:

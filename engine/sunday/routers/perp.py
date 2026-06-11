@@ -4,7 +4,9 @@ The agent places orders here like a human would on Binance: market/limit entries
 sized by contracts or USD notional, with optional leverage, margin mode (isolated/
 cross 逐倉/全倉), and attached take-profit / stop-loss. TP/SL are placed as reduce-only
 TAKE_PROFIT_MARKET / STOP_MARKET legs after the entry — the same primitive the
-exchange uses for native brackets.
+exchange uses for native brackets. Since Binance's Algo-Service migration those legs
+live in a separate conditional book (id = algoId); /api/perp/protection manages them
+for an existing position without re-opening it (PRD-003).
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import exchange, store
+from .. import exchange, protection as riskmath, store
 from ..apiutil import ex_call, require_trade_key, to_float
 
 router = APIRouter(prefix="/api/perp", tags=["perp"])
@@ -47,6 +49,14 @@ class CloseReq(BaseModel):
     symbol: str
 
 
+class ProtectionReq(BaseModel):
+    """Attach/replace TP/SL trigger legs on an EXISTING position (no new entry).
+    A null price leaves that leg kind untouched."""
+    symbol: str
+    take_profit: float | None = None       # trigger price; null = keep current TP legs
+    stop_loss: float | None = None         # trigger price; null = keep current SL legs
+
+
 def _norm_order(o: dict) -> dict:
     return {
         "id": o.get("id"), "symbol": o.get("symbol"), "type": o.get("type"),
@@ -54,6 +64,8 @@ def _norm_order(o: dict) -> dict:
         "price": to_float(o.get("price")), "amount": to_float(o.get("amount")),
         "filled": to_float(o.get("filled")), "reduce_only": o.get("reduceOnly"),
         "trigger_price": to_float(o.get("triggerPrice")), "ts": o.get("timestamp"),
+        # conditional legs live in Binance's Algo Service: this id is an algoId
+        "algo": bool((o.get("info") or {}).get("algoId")),
     }
 
 
@@ -199,3 +211,116 @@ def cancel_all(symbol: str) -> dict:
     require_trade_key()
     ex_call(lambda: exchange.cancel_all_orders(symbol))
     return {"ok": True, "symbol": symbol.upper()}
+
+
+# --------------------------------------------------------------------------
+# TP/SL protection legs on an existing position (PRD-003 §2b)
+# --------------------------------------------------------------------------
+
+def _position_for(symbol: str) -> dict | None:
+    """The raw positionRisk row for `symbol`, or None when flat."""
+    sym = symbol.upper()
+    for p in exchange.fetch_positions():
+        if p.get("symbol") == sym and to_float(p.get("positionAmt")):
+            return p
+    return None
+
+
+def _trigger_legs(symbol: str) -> list[dict]:
+    """Open TP/SL trigger legs for one symbol, with the detail the protection view and
+    the replace flow need (id / trigger_price / amount / algo-book membership)."""
+    out: list[dict] = []
+    for o in exchange.fetch_open_orders(symbol):
+        leg = riskmath.classify_leg(o.get("type"))
+        if leg:
+            out.append({
+                "tp_sl": leg, "id": str(o.get("orderId")),
+                "trigger_price": to_float(o.get("stopPrice")),
+                "status": (o.get("status") or "").lower(),
+                "amount": to_float(o.get("origQty")),
+                "close_position": bool(o.get("closePosition")),
+                "side": (o.get("side") or "").lower(),
+                "algo": bool(o.get("algo")), "ts": o.get("time"),
+            })
+    return out
+
+
+def _place_protection_leg(symbol: str, close_side: str, qty: float,
+                          trigger: float, take_profit: bool) -> dict:
+    """Place one reduce-only trigger leg; turn Binance's immediate-trigger rejection
+    into a 400 that tells the agent which side of the mark the trigger must sit on."""
+    try:
+        return exchange.place_stop(symbol, close_side, qty, trigger, take_profit=take_profit)
+    except Exception as e:
+        msg = str(e)
+        if "-2021" in msg or "immediately trigger" in msg.lower():
+            raise HTTPException(400,
+                f"trigger price {trigger} would fire immediately: for a long, stop_loss must sit "
+                "BELOW the mark and take_profit ABOVE it (mirrored for a short). Check the mark "
+                f"via GET /api/funding/{symbol.upper()} and re-place. Binance said: {msg[:140]}")
+        raise HTTPException(502, f"exchange error: {type(e).__name__}: {msg[:300]}")
+
+
+@router.get("/protection")
+def get_protection(symbol: str) -> dict:
+    """A symbol's TP/SL protection at a glance: the primary leg of each kind (newest),
+    ladder counts, SL coverage, and the position it protects (null when flat — any legs
+    listed then are orphans worth cancelling)."""
+    require_trade_key()
+    p = ex_call(lambda: _position_for(symbol))
+    legs = ex_call(lambda: _trigger_legs(symbol))
+    amt = to_float(p.get("positionAmt")) if p else None
+    position = None
+    if p and amt:
+        position = {
+            "side": "long" if amt > 0 else "short", "qty": abs(amt),
+            "entry": to_float(p.get("entryPrice")), "mark": to_float(p.get("markPrice")),
+            "leverage": int(to_float(p.get("leverage")) or 0) or None,
+        }
+    return {"symbol": symbol.upper(), "position": position,
+            **riskmath.protection_detail(abs(amt) if amt else 0.0, legs)}
+
+
+@router.post("/protection")
+def set_protection(req: ProtectionReq) -> dict:
+    """Attach or replace the TP/SL legs of an EXISTING position without re-opening it
+    (after a partial close, a dropped leg, or to move a stop). For each price given, a
+    new full-size reduce-only leg is placed FIRST and the old legs of that kind are
+    cancelled after — the position is never left naked mid-swap. Null leaves a kind as-is."""
+    require_trade_key()
+    if req.take_profit is None and req.stop_loss is None:
+        raise HTTPException(400, "provide take_profit and/or stop_loss (trigger price)")
+    if (req.take_profit is not None and req.take_profit <= 0) or \
+       (req.stop_loss is not None and req.stop_loss <= 0):
+        raise HTTPException(400, "trigger prices must be > 0")
+
+    p = ex_call(lambda: _position_for(req.symbol))
+    if not p:
+        raise HTTPException(404,
+            f"no open position for {req.symbol.upper()} — protection legs attach to an "
+            "existing position; open one via POST /api/perp/order")
+    amt = to_float(p.get("positionAmt")) or 0.0
+    qty = abs(amt)
+    close_side = "sell" if amt > 0 else "buy"
+    old = ex_call(lambda: _trigger_legs(req.symbol))
+
+    out: dict = {"ok": True, "symbol": req.symbol.upper()}
+    replaced: list[str] = []
+    cancel_failed: list[str] = []
+    for kind, price in (("take_profit", req.take_profit), ("stop_loss", req.stop_loss)):
+        if price is None:
+            continue
+        leg = _place_protection_leg(req.symbol, close_side, qty, price, kind == "take_profit")
+        out[kind] = _norm_order(leg)
+        for o in old:
+            if o["tp_sl"] != kind:
+                continue
+            try:
+                exchange.cancel_order(o["id"], req.symbol, algo=o["algo"])
+                replaced.append(o["id"])
+            except Exception:
+                cancel_failed.append(o["id"])  # old leg still resting; reduce-only legs can't over-close
+    out["replaced"] = replaced
+    if cancel_failed:
+        out["cancel_failed"] = cancel_failed
+    return out

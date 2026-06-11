@@ -82,6 +82,43 @@ class TestExposure(unittest.TestCase):
                          {"total_notional": 0.0, "exposure_pct": 0.0})
 
 
+class TestProtectionDetail(unittest.TestCase):
+    """Per-symbol protection view for GET /api/perp/protection (PRD-003 §2b)."""
+
+    @staticmethod
+    def _leg(kind, id_, trigger, ts, amount=1.0, close_position=False):
+        return {"tp_sl": kind, "id": id_, "trigger_price": trigger, "status": "new",
+                "amount": amount, "close_position": close_position, "ts": ts}
+
+    def test_one_leg_each(self):
+        legs = [self._leg("take_profit", "11", 750.0, 100),
+                self._leg("stop_loss", "22", 650.0, 100)]
+        got = P.protection_detail(1.0, legs)
+        self.assertEqual(got["take_profit"]["id"], "11")
+        self.assertEqual(got["stop_loss"]["id"], "22")
+        self.assertEqual((got["tp_legs"], got["sl_legs"]), (1, 1))
+        self.assertTrue(got["sl_qty_covers"])
+
+    def test_no_legs(self):
+        got = P.protection_detail(1.0, [])
+        self.assertIsNone(got["take_profit"])
+        self.assertIsNone(got["stop_loss"])
+        self.assertEqual((got["tp_legs"], got["sl_legs"]), (0, 0))
+        self.assertFalse(got["sl_qty_covers"])
+
+    def test_primary_is_newest_and_ladder_counted(self):
+        legs = [self._leg("stop_loss", "1", 660.0, 100, amount=0.5),
+                self._leg("stop_loss", "2", 650.0, 200, amount=0.5)]
+        got = P.protection_detail(1.0, legs)
+        self.assertEqual(got["stop_loss"]["id"], "2")   # newest wins
+        self.assertEqual(got["sl_legs"], 2)
+        self.assertTrue(got["sl_qty_covers"])           # 0.5 + 0.5 covers 1.0
+
+    def test_partial_stop_flagged(self):
+        legs = [self._leg("stop_loss", "1", 650.0, 100, amount=0.4)]
+        self.assertFalse(P.protection_detail(1.0, legs)["sl_qty_covers"])
+
+
 class TestDrawdown(unittest.TestCase):
     def test_drawdown_from_hwm(self):
         self.assertEqual(P.drawdown_pct(900.0, 1000.0), 10.0)

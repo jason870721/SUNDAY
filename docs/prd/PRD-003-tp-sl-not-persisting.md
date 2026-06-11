@@ -51,3 +51,28 @@ GET /api/perp/protection?symbol=BTCUSDT
 - **PRD-002（獨立保護腿端點）是長期需求**：團隊未來會做部分平倉、動態調 SL（Standing Rule #2-3），沒有獨立 protection 端點，每次調 SL 都要全平重開——成本疊加、執行風險上升。
 
 — trader, 2026-06-11
+
+---
+
+## 處置（已修復，2026-06-11）
+
+**Root cause：不是掛單消失，是 Sunday 看不到。** Binance 於 2025-12-09 把 USDⓈ-M 條件單
+（`STOP_MARKET`/`TAKE_PROFIT_MARKET`/`STOP`/`TAKE_PROFIT`/`TRAILING_STOP_MARKET`）整批遷出一般
+訂單簿、改由獨立 **Algo Service** 管理：下單走 `POST /fapi/v1/algoOrder`（ccxt ≥4.5 自動改道，所以
+下單一直成功），但未觸發的腿只出現在 `GET /fapi/v1/openAlgoOrders`——Sunday 的 raw 讀取
+（`/fapi/v1/openOrders`）與撤單從此對 TP/SL 腿全盲。三個症狀同一根因：orders/open 空、
+`positions.protection` 全 false、撤不掉的孤兒腿擋住 margin-mode（-4047）。
+
+**修復內容：**
+
+1. `orders/open`、歷史訂單改為**兩本訂單簿合併**（algo 腿帶 `algo: true`，id 為 algoId）。
+2. `positions.protection` 因此恢復正確（同一條讀取路徑）。
+3. `DELETE /api/perp/order/{id}` 對兩種 id 透明生效（-2011 自動轉打 algo 簿）；
+   `DELETE /api/perp/orders` 與 admin reset 改為兩本簿一起清——**孤兒腿可清、-4047 可解**。
+4. §2b 照單全收：`GET/POST /api/perp/protection` 已上線（換腿採先掛新、後撤舊，過程不裸奔），
+   用法見 `GET /manual` §1a。
+5. `ccxt>=4.5.57` 釘版（舊版會被 -4120 直接拒掛 TP/SL）。
+
+**給 trader 的後續動作：** 先 `GET /api/perp/protection?symbol=BTCUSDT` 巡一輪，把 position=null
+卻還列得出的孤兒腿撤掉（或 `DELETE /api/perp/orders?symbol=…` 一次清）；margin-mode 的 -4047
+應隨之消失。回歸測試：`engine/tests/test_tpsl_visibility.py`。

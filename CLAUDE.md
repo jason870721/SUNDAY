@@ -85,8 +85,12 @@ engine/sunday/
   (1) Binance `-1021` 時鐘偏移加固（`_signed` round-trip 校時 + 落後安全偏壓 + recvWindow 10s +
   自癒重試；ccxt `trade_ex` 開 `adjustForTimeDifference`）；(2) 前端改黑金配色、全面 responsive
   不跑版（`.split`/`.split-r` + 側欄抽屜）；(3) `telegram.py` 把 report / 提醒 / 持倉損益推 User 手機。
-- **107 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
+- **134 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
   protection 風控數學與 equity 快照測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
+- **PRD-003 已修復（2026-06-11）**：Binance 2025-12-09 把條件單遷到 Algo Service，TP/SL 腿
+  從此不在 `/fapi/v1/openOrders`。`exchange.py` 讀取/撤單改兩本訂單簿合併（`algoorders.py`
+  純映射，腿帶 `algo: true`），`-2011` 自動轉打 algo 簿；新增 `GET/POST /api/perp/protection`
+  （先掛新腿、後撤舊腿）；`ccxt>=4.5.57` 釘版（舊版 -4120 拒掛）。
 - swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 7 workers）採**決策/執行分離**：
   friday = 指揮官/PM（order ticket + 調度 + 驗收），trader = 執行台（下單/管倉/對帳；
   `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）。
