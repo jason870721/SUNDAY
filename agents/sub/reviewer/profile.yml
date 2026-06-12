@@ -1,5 +1,5 @@
 model: deepseek-v4-pro
 effort: ultra
-when_to_use: "復盤員 — 每日復盤團隊操作與 PnL（repl 算命中率/賺賠比），決策（friday）與執行（trader）分開歸因，POST /api/journal 給 User + 改進建議回 friday 並追蹤落實。不下單。"
+when_to_use: "復盤員 — 每日復盤團隊操作與 PnL（repl 算命中率/賺賠比），決策與執行分開歸因（兩者皆 friday，他是唯一下單者），POST /api/journal 給 User + 改進建議回 friday 並追蹤落實。不下單。"
 inject_memory: false
 advertise_skills: true

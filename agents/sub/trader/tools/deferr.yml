@@ -1,4 +1,0 @@
-# Deferred tools — the framework advertises these names in the prompt and
-# auto-adds tool_search (RP-19); no need to name them in system_prompt.md.
-- json_query  # pluck fields out of large JSON responses
-- repl        # python for heavier execution math (slippage stats etc.)

@@ -104,11 +104,14 @@ engine/sunday/
   從此不在 `/fapi/v1/openOrders`。`exchange.py` 讀取/撤單改兩本訂單簿合併（`algoorders.py`
   純映射，腿帶 `algo: true`），`-2011` 自動轉打 algo 簿；新增 `GET/POST /api/perp/protection`
   （先掛新腿、後撤舊腿）；`ccxt>=4.5.57` 釘版（舊版 -4120 拒掛）。
-- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 7 workers）採**決策/執行分離**：
-  friday = 指揮官/PM（order ticket + 調度 + 驗收），trader = 執行台（下單/管倉/對帳；
-  `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）。
+- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 6 workers）：**交易權集中在
+  friday 一人**（2026-06-12 裁撤 trader 執行台——決策/執行分離造成「持有 vs 平倉」雙頭打架）：
+  friday = 指揮官/PM + 唯一下單者（決策 + 親自執行 `/api/perp`、管倉對帳、調度驗收），
+  risk-monitor 是唯一外部煞車；`position_pnl` webhook 一律喚醒 leader（`MONITOR_WEBHOOK_TO`
+  維持預設 `leader`）。
 - **已對齊 evva 第五波（RP-19~28）**：工具教學/deferred 公告/injection 防線/記憶協議由框架
   注入，persona 只寫人設與行規；成員私人記憶原生化（`agents/…/<name>/memory/`，已 gitignore），
-  `/api/memory` 收斂為兩塊公告板（friday 憲法 + researcher 研究日誌）；risk-monitor 用
-  `task_propose` 把缺陷修復放上看板；共享 skills 在 `agents/skills/`（friday 可 `skill_publish`）。
+  `/api/memory` 收斂為兩塊公告板（friday 憲法 + researcher 研究日誌）；risk-monitor 的缺陷
+  告警直達 friday 並用鬧鐘追蹤（交易權集中後不再向執行台開看板提案）；共享 skills 在
+  `agents/skills/`（friday 可 `skill_publish`）。
   系統協作全景見 [docs/workflow.md](docs/workflow.md)。

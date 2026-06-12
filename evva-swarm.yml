@@ -1,43 +1,40 @@
 name: sunday              # → webhook endpoint POST /api/swarm/sunday/event
 workdir: .
 
-# A crypto perp trading team on Sunday (Binance USDⓈ-M proxy), reorganised around a
-# decision/execution split:
-#   friday (leader)  = COMMANDER / PM — decides trades and writes order tickets, runs the
-#                      team (task board, schedule_set, alarm_set), owns the risk consensus
-#                      with risk-monitor, reports to the User. Does NOT routinely execute.
-#   trader           = EXECUTION DESK — turns friday's tickets into positions via /api/perp:
-#                      pre-flight against the consensus, place with mandatory TP/SL, verify
-#                      fills + protection legs, manage in-position standing rules, reconcile.
+# A crypto perp trading team on Sunday (Binance USDⓈ-M proxy). Trading authority is
+# CONCENTRATED in the leader (the trader execution desk was dissolved 2026-06-12: the
+# desk and the commander fought over hold-vs-close and operations got confused):
+#   friday (leader)  = COMMANDER / PM / SOLE TRADING HAND — decides trades AND executes
+#                      them himself via /api/perp (pre-flight against the consensus, place
+#                      with mandatory TP/SL, verify fills + protection legs, manage
+#                      in-position standing rules, reconcile), runs the team (task board,
+#                      schedule_set, alarm_set), owns the risk consensus with risk-monitor,
+#                      reports to the User.
 #   analyst-flow     = technicals / perp microstructure / world indices.
 #   analyst-news     = tactical news/events on the current watchlist (+ global watch).
 #   researcher       = strategic frontier exploration, 3×/day, feeds NEW directions.
-#   risk-monitor     = exposure patrol vs the friday↔risk consensus; decision breaches →
-#                      friday, mechanical defects (naked positions, orphan legs) → trader;
+#   risk-monitor     = exposure patrol vs the friday↔risk consensus; decision breaches AND
+#                      mechanical defects (naked positions, orphan legs) → friday — he is
+#                      the only trading hand, and risk-monitor is the only EXTERNAL brake;
 #                      two ignored warnings → escalate to the User via /api/reports.
-#   reviewer         = daily post-mortem; attributes decision (friday) vs execution (trader)
-#                      errors separately; tracks whether advice actually changed behavior.
+#   reviewer         = daily post-mortem; still attributes decision vs execution errors
+#                      separately (both friday's now); tracks whether advice changed behavior.
 #   watchdog         = cheap 3-min liveness + Top10 volatility tripwire.
 #
 # Wake discipline: friday is primarily EVENT-driven — Sunday webhooks every 5% position-PnL
-# step and triggered price alerts to the leader by default (set MONITOR_WEBHOOK_TO=trader in
-# engine/.env to route position events straight to the execution desk), and teammates
-# send_message him. The cron schedules below are SAFETY-NET routines (periodic patrol /
-# review), NOT market polling. friday may retune any worker's cadence at runtime via
-# schedule_set (his steering wheel — check list_members first).
+# step and triggered price alerts to the leader (MONITOR_WEBHOOK_TO stays "leader"), and
+# teammates send_message him. The cron schedules below are SAFETY-NET routines (periodic
+# patrol / review), NOT market polling. friday may retune any worker's cadence at runtime
+# via schedule_set (his steering wheel — check list_members first).
 
 leader:
   agent: friday
   budget_tokens: -1        # never freeze the commander (workers stay capped; runs are bounded by stall_hard_timeout)
   schedule:
     cron: "*/30 * * * *"
-    prompt: "指揮官例行巡檢（協調為主，非看盤輪詢）：① GET /api/memory/friday 回顧憲法（共識/watchlist/持倉理由）；② GET /api/account/positions·/pnl 快速對帳（保護腿都在嗎、曝險如何）；③ task_list + proposal_list 盤點看板——卡在 running 的課題要不要催（send_message 帶 ref_task）、verifying 的逐一查證後 task_verify（不合格退件寫清楚缺什麼）、open 的提案逐一裁決（proposal_accept 或 proposal_decline 附理由）；④ list_members 看儀表板——誰忙誰閒、token 燒太兇的讓他歇、排程節奏不對就 schedule_set 調（改動會持久化，記下何時調回來）；⑤ GET /api/alerts?status=active 清掉不再需要的提醒；⑥ 有未閉環的隊友回報就回掉（採納/不採納+理由）。憲法有變就 PUT /api/memory/friday 寫回、私人教訓寫進自己的記憶目錄；都正常就一句 stand down。"
+    prompt: "指揮官例行巡檢（協調 + 執行衛生，非看盤輪詢）：① GET /api/memory/friday 回顧憲法（共識/watchlist/持倉理由/standing rules）；② GET /api/account/positions·/pnl 對帳 + 執行衛生——每倉 protection 驗一遍：stop_loss:false 或 sl_qty_covers:false 立刻補齊（POST /api/perp/protection），null 就去 /api/account/orders/open 確認；對照 open orders 撤掉已平倉標的的孤兒 TP/SL 掛單；standing rules 觸發條件成立的照規則執行；③ task_list + proposal_list 盤點看板——卡在 running 的課題要不要催（send_message 帶 ref_task）、verifying 的逐一查證後 task_verify（不合格退件寫清楚缺什麼）、open 的提案逐一裁決（proposal_accept 或 proposal_decline 附理由）；④ list_members 看儀表板——誰忙誰閒、token 燒太兇的讓他歇、排程節奏不對就 schedule_set 調（改動會持久化，記下何時調回來）；⑤ GET /api/alerts?status=active 清掉不再需要的提醒；⑥ 有未閉環的隊友回報就回掉（採納/不採納+理由）。憲法有變就 PUT /api/memory/friday 寫回、私人教訓寫進自己的記憶目錄；都正常就一句 stand down。"
 
 workers:
-  - agent: trader
-    schedule:
-      cron: "15,45 * * * *" # staggered vs friday's :00/:30 patrol — execution hygiene, not market polling
-      prompt: "執行台例行巡檢（保護腿完整性，非行情輪詢）：① 看記憶索引接上 standing rules 與在途事項（standing rules 的權威版在 GET /api/memory/friday 的憲法）；② GET /api/account/positions 驗每倉 protection——stop_loss:false 或 sl_qty_covers:false 立刻補齊（修復後回報 friday 與 risk-monitor）、null 就去 /api/account/orders/open 確認；③ 對照 /api/account/orders/open 撤掉已平倉標的的孤兒 TP/SL 掛單；④ my_tasks 看有沒有 friday 的新 ticket 或未完成的執行；⑤ standing rules 觸發條件成立的照規則執行並回報。在途事項或教訓有變就更新自己的記憶目錄；都正常就一句 stand down。"
   - agent: analyst-flow
     schedule:
       cron: "*/10 * * * *" # every 10 mins
@@ -54,11 +51,11 @@ workers:
     budget_tokens: -1        # the brake line is never frozen by the daily budget breaker
     schedule:
       cron: "0 * * * *" # every hr
-      prompt: "風控巡檢：先 GET /api/memory/friday 確認風控共識存在（沒有 = 最高優先異常，立刻找 friday 協商、不准 stand down）；GET /api/account/pnl（exposure_pct + 每倉 protection/liq_distance_pct）·/drawdown·/balance，對照共識（單筆/總曝險/槓桿/回撤/單一標的/可用餘額下限）——protection 顯示裸倉或半裸？超標？drawdown_pct 逼頂？free 逼近下限？高相關標的同向集中？緊急機械缺陷（裸倉）直接訊息 trader 立即修復（CC friday）；非緊急但該追蹤驗收的缺陷（孤兒掛單清理、半裸補齊）用 task_propose 開提案（suggested_assignee: trader）；決策越線警告 friday（哪條越線 + 具體數字 + 建議動作）；嚴重的設 alarm 回查、連兩次未處理就 POST /api/reports 升級給 User。告警與追蹤記錄更新進自己的記憶目錄；沒事就一句 stand down。"
+      prompt: "風控巡檢：先 GET /api/memory/friday 確認風控共識存在（沒有 = 最高優先異常，立刻找 friday 協商、不准 stand down）；GET /api/account/pnl（exposure_pct + 每倉 protection/liq_distance_pct）·/drawdown·/balance，對照共識（單筆/總曝險/槓桿/回撤/單一標的/可用餘額下限）——protection 顯示裸倉或半裸？超標？drawdown_pct 逼頂？free 逼近下限？高相關標的同向集中？一律找 friday（交易之手只有他）：緊急機械缺陷（裸倉/半裸）直接訊息要他立即補齊保護腿；非緊急缺陷（孤兒掛單清理）與決策越線給警告（哪條越線 + 具體數字 + 建議動作）；嚴重的設 alarm 回查、連兩次未處理就 POST /api/reports 升級給 User。告警與追蹤記錄更新進自己的記憶目錄；沒事就一句 stand down。"
   - agent: reviewer
     schedule:
       cron: "0 0 * * *" # 00:00 daily, host TZ
-      prompt: "當日復盤：GET /api/account/trades·/orders·/positions·/pnl·/drawdown（分頁翻完）+ GET /api/memory/friday（憲法與持倉理由）+ 自己記憶目錄裡的 playbook（上次建議），用 repl 算命中率/平均賺賠/對 10% 月目標進度，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、決策錯還是執行錯——friday 與 trader 分開歸因），追蹤上次建議有沒有真的改變行為，把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條建議，討論需不需要改善調整。收工前把 playbook 更新進自己的記憶目錄。"
+      prompt: "當日復盤：GET /api/account/trades·/orders·/positions·/pnl·/drawdown（分頁翻完）+ GET /api/memory/friday（憲法與持倉理由）+ 自己記憶目錄裡的 playbook（上次建議），用 repl 算命中率/平均賺賠/對 10% 月目標進度，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、決策錯還是執行錯——兩者都在 friday 身上，仍分開歸因），追蹤上次建議有沒有真的改變行為，把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條建議，討論需不需要改善調整。收工前把 playbook 更新進自己的記憶目錄。"
   - agent: watchdog          # cheap DeepSeek-flash watchdog — every 5 min, read-only health + Top10 volatility
     schedule:
       cron: "*/5 * * * *" # 5 mins — keep in sync with the "every 5 min" wording in profile.yml / system_prompt.md / friday's roster
@@ -67,8 +64,8 @@ workers:
 settings:
   # bypass = fully autonomous (operator-confirmed): GET reads and POST trades both run
   # with no human approval prompt, for unattended 24/7 operation. The risk backstop is
-  # mandatory TP/SL on every order + trader's pre-flight consensus check + risk-monitor's
-  # patrol + the friday↔risk consensus itself.
+  # mandatory TP/SL on every order + friday's pre-flight consensus check + risk-monitor's
+  # patrol (the only external brake) + the friday↔risk consensus itself.
   permission_mode: bypass
   max_iterations: 99
   # Operating fuses for an unattended 7×24 team (see the evva swarm guide §8):

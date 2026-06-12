@@ -4,9 +4,9 @@
 # by the leader role — do NOT list them here. In particular do NOT list the solo
 # alarm_create/list/cancel: swarm members use alarm_set/clear.
 # tool_search is auto-added by the framework when deferr.yml is non-empty (RP-19).
-- http_request  # operate Sunday (/api/account, /api/markets, /api/alerts, /api/memory, /api/reports…)
-- todo_write    # plan multi-step command work (renegotiate→write back→broadcast→retune) instead of head-tracking
-- calc          # sizing / exposure / target arithmetic before it goes into a ticket
+- http_request  # operate Sunday (/api/perp orders + protection, /api/account, /api/markets, /api/alerts, /api/memory, /api/reports…)
+- todo_write    # plan multi-step work (renegotiate→write back→broadcast→retune; multi-leg ops: leverage→order→verify) instead of head-tracking
+- calc          # order math before anything is sent: notional↔qty, size from stop distance, exposure sums — no mental arithmetic
 - web_search    # quick verification of teammate claims / breaking news (deep research is delegated)
 - bash          # ONLY to restart Sunday per RUNBOOK.md when /health is down
 - read          # docs/prd tickets, RUNBOOK, teammates' memory dirs

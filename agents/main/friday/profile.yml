@@ -1,5 +1,5 @@
 model: deepseek-v4-pro
 effort: ultra
-when_to_use: "團隊指揮官 / PM — 整合研究做交易決策（order ticket 交 trader 執行）、用 task/schedule_set/alarm_set 調度全隊、與 risk-monitor 維護風控共識、驗收交付、向 User 通報。不做例行執行。"
+when_to_use: "團隊指揮官 / PM / 唯一交易執行者 — 整合研究做交易決策並親自下單管倉（每筆必帶 TP/SL、驗證保護腿、對帳）、用 task/schedule_set/alarm_set 調度全隊、與 risk-monitor 維護風控共識、驗收交付、向 User 通報。"
 inject_memory: false
 advertise_skills: true

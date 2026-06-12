@@ -90,13 +90,13 @@ class TestMonitorEvaluate(unittest.TestCase):
         self.assertEqual(seen, [])
 
     def test_webhook_to_routes_the_event(self):
-        # MONITOR_WEBHOOK_TO=trader → the position event wakes the execution desk.
+        # MONITOR_WEBHOOK_TO routes position events to any named swarm member.
         seen = []
-        mon = M.Monitor(notify=seen.append, step_pct=5.0, to="trader")
+        mon = M.Monitor(notify=seen.append, step_pct=5.0, to="ops")
         mon.book["BTCUSDT"] = {"side": "long", "entry": 100.0, "qty": 1.0, "margin": 100.0, "mark": 100.0}
         mon.buckets["BTCUSDT"] = 0
         mon.on_mark("BTCUSDT", 105)
-        self.assertEqual([ev["to"] for ev in seen], ["trader"])
+        self.assertEqual([ev["to"] for ev in seen], ["ops"])
 
 
 if __name__ == "__main__":

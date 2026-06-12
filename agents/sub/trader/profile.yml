@@ -1,7 +1,0 @@
-# Execution desk: precision work on a strong model at high (not ultra) effort —
-# the SOP is prompt-driven; judgment calls escalate to friday by design.
-model: deepseek-v4-pro
-effort: high
-when_to_use: "執行交易員 — 接 friday 的 order ticket 下單/管倉（每筆必帶 TP/SL、驗證成交與保護腿、對帳）、依 standing rules 管理在倉部位。不決定方向。"
-inject_memory: false
-advertise_skills: true

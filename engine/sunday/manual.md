@@ -44,7 +44,7 @@ curl -s "http://127.0.0.1:7777/api/funding/history?symbol=BTCUSDT&page=1"
 # X-Agent = 你的名字（稽核帳本）：所有 /api/perp 寫入端點都請帶上——訂單/成交查詢會回 agent
 # 欄位，沒帶的單顯示 null（= 無法歸責，異常事件查不到你頭上也記不到你功勞）。
 curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application/json' \
-  -H 'X-Agent: trader' -d '{
+  -H 'X-Agent: friday' -d '{
   "symbol":"BTCUSDT","side":"buy","type":"market","notional_usd":200,
   "leverage":5,"margin_mode":"isolated","take_profit":75000,"stop_loss":60000,
   "memo":"4h 突破壓力 + 資金費轉負，順勢做多" }'
@@ -166,7 +166,7 @@ reviewer 每日把復盤 POST 到這裡存進 DB，User 在 dashboard 的 **Jour
 每個 agent 的**私人工作記憶**現在原生存在 evva（各自的 `agents/…/<name>/memory/` 目錄，
 醒來自動帶索引）；這裡只放**刻意發布**的跨 agent 合約，User 在 dashboard **Memory** 分頁讀：
 
-- `friday` —— **團隊憲法**：風控共識、watchlist、持倉理由、standing rules。trader 下單前
+- `friday` —— **團隊憲法**：風控共識、watchlist、持倉理由、standing rules。friday 下單前
   pre-flight 對照、risk-monitor 巡檢對照、analyst 對齊 watchlist。
 - `researcher` —— **研究日誌**：標日期的線索與 idea，friday 與 User 回看。
 
@@ -215,7 +215,7 @@ curl -s http://127.0.0.1:7777/api/system/time
 `position_pnl`（倉位每 5% ROI）與 `price_alert`（提醒觸發）兩種事件，POST 到 `EVVA_WEBHOOK_URL`
 （預設 `…/api/swarm/sunday/event`），payload = `{title, body, data, to}`，`data` 內含結構化欄位
 ＋ `suggested_action`，woken 的 agent 第一回合即可行動。`position_pnl` 喚醒誰由
-`MONITOR_WEBHOOK_TO` 決定（預設 `leader` → friday；設 `trader` 直達執行台）；`price_alert`
+`MONITOR_WEBHOOK_TO` 決定（預設且現行 `leader` → friday，唯一下單者）；`price_alert`
 固定喚醒 leader。
 
 ## Dashboard（人類在瀏覽器看）
