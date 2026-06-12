@@ -105,7 +105,7 @@ def build_server() -> FastMCP:
     def indicators(
         symbol: str,
         interval: Interval = "1h",
-        set: str = "rsi,ema,macd,bollinger,adx,atr",
+        set: str = "rsi,ema,sma,macd,bollinger,adx,atr",
         limit: Annotated[int, Field(ge=200, le=400)] = 200,
     ) -> str:
         """Current technical-indicator panel (latest values) over recent candles:
