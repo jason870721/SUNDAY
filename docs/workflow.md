@@ -27,11 +27,12 @@
    │   User ──(evva web)──►  friday（leader = 指揮官 / PM）                         │
    │                           │  ① 決策 → order ticket（task）→ trader 執行        │
    │                           │  ② task/send_message 指揮、schedule_set 調節奏     │
-   │        ┌────────┬─────────┼─────────┬─────────┬───────────┬──────────┐       │
-   │        ▼        ▼         ▼         ▼         ▼           ▼          ▼       │
-   │    trader  analyst-flow analyst-news researcher risk-monitor reviewer watchdog│
-   │   (執行台) (技術面/指數) (戰術新聞)  (戰略前瞻)  (風控巡檢)  (每日復盤)(看門狗)  │
+   │        ┌────────┬────────┼────────┬─────────┬──────────┬─────────┬────────┐  │
+   │        ▼        ▼        ▼        ▼         ▼          ▼         ▼        ▼  │
+   │    trader analyst-flow analyst-news researcher risk-monitor reviewer watchdog evva
+   │   (執行台)(技術面/指數)(戰術新聞) (戰略前瞻) (風控巡檢) (每日復盤) (看門狗)(工程師)│
    │      │ POST /api/perp/*（唯一例行下單者）            send_message ──► friday   │
+   │      │ evva: PRD 票實作 → 測試 → commit → 重啟 Sunday（工程，不下單）           │
    └──────┼────────────────────┼──────────────────────────────────────────────────┘
               ▲ webhook（to: MONITOR_WEBHOOK_TO，預設 leader）│ http_request（全部免 token）
               │                               ▼
@@ -92,7 +93,7 @@
 
 ---
 
-## 3. 角色盤點（1 leader + 7 workers）
+## 3. 角色盤點（1 leader + 8 workers）
 
 定義在 [`evva-swarm.yml`](../evva-swarm.yml)；每個 agent 的人設 / SOP 在
 [`agents/main/`](../agents/main/) 與 [`agents/sub/`](../agents/sub/)（`system_prompt.md` +
@@ -108,6 +109,7 @@
 | **risk-monitor** | **1h** cron | 風控巡檢：`/api/account/pnl`·`/drawdown`·`/balance` 對照 friday↔risk 共識（裸倉？超標？高相關集中？）→ 決策越線警告 friday、機械缺陷（裸倉/孤兒掛單）點名 trader 修復；連兩次未處理 `POST /api/reports` 升級 User | **只觀察只建議**，沒有交易職權 |
 | **reviewer** | 每日 **00:00** cron（時區跟著 evva 主機） | 當日復盤：`/api/account/trades`·`/orders`·`/pnl`（repl 算命中率/賺賠比）歸因賺賠與 10% 月目標進度，**決策（friday）與執行（trader）分開歸因** → `POST /api/journal`（User 在 dashboard Journal 分頁讀）+ 重點回報 friday 並追蹤落實 | 不下單 |
 | **watchdog** | **5m** cron（pin 在廉價模型） | 看門狗：`GET /health` + Top10 市場急拉急殺比對（快照存 `{workdir}/.watchdog-markets.json`）→ **只在異常時**通知 friday，正常就靜默收工 | 不分析、不研究、無 memory |
+| **evva**（persona member，RP-29） | friday 的 ticket / 訊息（**無 cron**，純派工驅動） | **特派工程師**：接 Sunday 軟體改動 ticket（`docs/prd/` PRD 實作、bug 修復）→ 實作 → `./scripts/run-tests.sh` 綠 → commit main → 照 RUNBOOK 重啟（**先知會 friday** 擇時）→ 驗 `/health` → 回報（票號+hash+證據）；失敗 `git revert` 回滾重啟。行規見 repo 根的 `EVVA.md` | 不下單、不碰 `/api/perp`；不改憲法與隊友記憶；不碰 `../evva` |
 
 **協作管道**：`send_message`（叫醒對方；`to:"all"` 廣播、`ref_task` 關聯課題）、task 面板
 （`task_create`/`task_assign` 派課題 → 交付進 verifying → friday `task_verify` 驗收或退件）、
@@ -189,7 +191,7 @@ runtime 改任何 worker 的 cron 與指令——他的方向盤；動之前先 
 | `/api/journal` | reviewer（每日） | User（dashboard） | 復盤日誌 |
 | `/api/reports` | friday（事件驅動）、risk-monitor（升級） | User（dashboard + Telegram） | 大賺 / 大賠 / 系統錯誤快訊 |
 | 訂單 `memo` | trader（隨單，抄 ticket 理由） | User（倉位查詢回顯） | 每一筆單的「為什麼」 |
-| `docs/PRD/` | 任何 agent | 開發者 | 對 Sunday 的功能需求開票 |
+| `docs/PRD/` | 任何 agent | evva（特派工程師）與開發者 | 對 Sunday 的功能需求開票（friday 開 task 派 evva 實作） |
 
 ---
 

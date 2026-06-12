@@ -97,9 +97,12 @@ engine/sunday/
   從此不在 `/fapi/v1/openOrders`。`exchange.py` 讀取/撤單改兩本訂單簿合併（`algoorders.py`
   純映射，腿帶 `algo: true`），`-2011` 自動轉打 algo 簿；新增 `GET/POST /api/perp/protection`
   （先掛新腿、後撤舊腿）；`ccxt>=4.5.57` 釘版（舊版 -4120 拒掛）。
-- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 7 workers）採**決策/執行分離**：
+- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 8 workers）採**決策/執行分離**：
   friday = 指揮官/PM（order ticket + 調度 + 驗收），trader = 執行台（下單/管倉/對帳；
-  `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）。
+  `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）。**evva 以 persona member
+  （evva RP-29 功能）駐隊擔任特派工程師**：接 friday 的 PRD/bug ticket → 實作 → 測試綠 →
+  commit main → 照 RUNBOOK 重啟 → 驗 `/health` → 回報；行規見 repo 根的 `EVVA.md`（整合設計：
+  docs/superpowers/specs/2026-06-11-evva-engineer-onboarding-design.md）。
 - **已對齊 evva 第五波（RP-19~28）**：工具教學/deferred 公告/injection 防線/記憶協議由框架
   注入，persona 只寫人設與行規；成員私人記憶原生化（`agents/…/<name>/memory/`，已 gitignore），
   `/api/memory` 收斂為兩塊公告板（friday 憲法 + researcher 研究日誌）；risk-monitor 用
