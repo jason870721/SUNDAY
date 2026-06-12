@@ -155,9 +155,14 @@ def shape_market_detail(payload: dict) -> str:
     limits = info.get("limits") or {}
     amt = limits.get("amount") or {}
     cost = limits.get("cost") or {}
+    # binanceusdm's 24h-ticker upstream never carries bid/ask — render the pair
+    # only when present instead of a permanent "bid ? ask ?" (it reappears by
+    # itself if the engine ever reads a book-ticker source)
+    bid_ask = ""
+    if t.get("bid") is not None or t.get("ask") is not None:
+        bid_ask = f"  bid {fmt_price(t.get('bid'))}  ask {fmt_price(t.get('ask'))}"
     return "\n".join([
-        f"{payload.get('symbol', '?')}  last {fmt_price(t.get('last'))}"
-        f"  bid {fmt_price(t.get('bid'))}  ask {fmt_price(t.get('ask'))}"
+        f"{payload.get('symbol', '?')}  last {fmt_price(t.get('last'))}{bid_ask}"
         f"  24h {fmt_pct(t.get('change_pct'))}"
         f"  range {fmt_price(t.get('low'))}–{fmt_price(t.get('high'))}"
         f"  vol {fmt_usd(t.get('quote_volume'))}",

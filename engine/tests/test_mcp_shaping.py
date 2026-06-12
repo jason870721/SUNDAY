@@ -142,15 +142,27 @@ class MarketDetailTest(unittest.TestCase):
     def test_blocks(self):
         out = shaping.shape_market_detail(self.PAYLOAD)
         self.assertIn("BTCUSDT  last 67000.5", out)
+        self.assertIn("bid 67000  ask 67001", out)
         self.assertIn("range 65000–68000", out)
         self.assertIn("precision: price 0.1 · qty 0.001", out)
         self.assertIn("limits: qty 0.001–500 · notional ≥ 100", out)
         self.assertIn("max leverage 125x", out)
         self.assertIn("fees: maker 0.02% · taker 0.04% · active: true", out)
 
+    def test_no_bid_ask_upstream_omits_pair(self):
+        # the REAL binanceusdm shape: the 24h-ticker source has no bid/ask —
+        # the pair must vanish, not render as a permanent "bid ? ask ?"
+        payload = {**self.PAYLOAD,
+                   "ticker": {**self.PAYLOAD["ticker"], "bid": None, "ask": None}}
+        out = shaping.shape_market_detail(payload)
+        self.assertNotIn("bid", out)
+        self.assertNotIn("ask", out)
+        self.assertIn("BTCUSDT  last 67000.5  24h +1.23%", out)
+
     def test_missing_info_is_defensive(self):
         out = shaping.shape_market_detail({"symbol": "X"})
         self.assertIn("X  last ?", out)
+        self.assertNotIn("bid", out)
         self.assertIn("max leverage ?x", out)
 
 
