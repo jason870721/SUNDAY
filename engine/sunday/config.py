@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # Webhook the swarm every `monitor_step_pct` move in an open position's ROI%.
     monitor_enabled: bool = True
     monitor_step_pct: float = 5.0
+    # Anti-chatter dead band: a step line only counts as crossed once ROI is
+    # `monitor_hyst_pct` past it, and the armed bucket holds until ROI exits its
+    # range expanded by ±this — oscillation around ±5% fires once, not per wiggle.
+    # 0 = off (raw bucket semantics). Leverage amplifies ROI noise (lev × price
+    # wiggle), so raise this for high-leverage books.
+    monitor_hyst_pct: float = 1.0
     monitor_poll_sec: int = 15        # position-book refresh / REST fallback cadence
     monitor_webhook_to: str = "leader"  # which swarm member position_pnl events wake ("leader" → friday, the commander and sole trading hand)
     equity_snap_sec: int = 300        # equity snapshot cadence (drawdown high-water mark)

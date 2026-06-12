@@ -5,10 +5,17 @@ ROI% crosses a ``step_pct`` boundary (±5%, ±10% …). ROI is derived from one 
 the mark price — so the websocket path (``on_mark``, fast) and the poll path
 (``refresh_book``, the authority on entry/qty/margin) never disagree and flap a bucket.
 
-Three pure helpers (stdlib, unit-tested, also used by /api/account):
+A crossing only counts once it penetrates ``hyst_pct`` past the line (a Schmitt-
+trigger dead band): after a notification the armed bucket holds until ROI exits
+the bucket's range expanded by ±hyst, so mark noise oscillating across a step
+line (the +5% wiggle that used to fire a webhook per crossing) is silent —
+one excursion, one notification. ``hyst_pct=0`` restores the raw behavior.
+
+Pure helpers (stdlib, unit-tested, also used by /api/account):
 ``position_roi`` (ROI from a ccxt position), ``derived_roi`` (ROI from mark + book),
-``bucket`` (which step an ROI sits in). The ``Monitor`` class holds the in-memory book
-+ baselines and lazy-imports the heavy bits so the helpers test without ccxt.
+``bucket`` (which step an ROI sits in), ``hyst_bucket`` (the dead-band re-bucket).
+The ``Monitor`` class holds the in-memory book + baselines and lazy-imports the
+heavy bits so the helpers test without ccxt.
 """
 
 from __future__ import annotations
@@ -85,18 +92,45 @@ def bucket(roi_pct: float, step_pct: float) -> int:
     return int(roi_pct / step_pct)
 
 
+def _band(armed: int, step_pct: float) -> tuple[float, float]:
+    """The ROI range bucket ``armed`` covers under truncation-toward-zero:
+    0 → (−step, +step), k>0 → [k·step, (k+1)·step), k<0 → ((k−1)·step, k·step]."""
+    if armed > 0:
+        return armed * step_pct, (armed + 1) * step_pct
+    if armed < 0:
+        return (armed - 1) * step_pct, armed * step_pct
+    return -step_pct, step_pct
+
+
+def hyst_bucket(roi_pct: float, armed: int, step_pct: float, hyst_pct: float) -> int:
+    """Anti-chatter re-bucket: hold ``armed`` while the ROI stays inside the armed
+    bucket's range expanded by ±``hyst_pct``; once it exits, bucket from the raw ROI.
+    Re-crossing a just-notified line therefore needs ≥hyst of real movement —
+    oscillation around ±step fires once per excursion instead of once per wiggle.
+    The exit comparison is inclusive (reaching step+hyst IS the crossing), so
+    hyst=0 degrades to plain ``bucket()`` semantics exactly."""
+    if step_pct <= 0:
+        return 0
+    lo, hi = _band(armed, step_pct)
+    if lo - hyst_pct < roi_pct < hi + hyst_pct:
+        return armed
+    return bucket(roi_pct, step_pct)
+
+
 class Monitor:
     """Stateful consumer driven by the price hub. Thread-safe (RLock — the refresh
     thread and the ws loop both touch the book; reentrant so refresh→evaluate nests)."""
 
     def __init__(self, notify: Callable[[dict], None] | None = None,
                  step_pct: float | None = None, to: str | None = None,
-                 sweep: Callable[[str, int], None] | None = None) -> None:
+                 sweep: Callable[[str, int], None] | None = None,
+                 hyst_pct: float | None = None) -> None:
         self.book: dict[str, dict] = {}      # symbol id (BTCUSDT) -> {side, entry, qty, margin, mark}
-        self.buckets: dict[str, int] = {}    # symbol id -> last-notified step bucket
+        self.buckets: dict[str, int] = {}    # symbol id -> last-notified (armed) step bucket
         self._lock = threading.RLock()
         self._notify = notify or _default_position_notify
         self._step_pct = step_pct            # None → read live settings (tests inject a fixed step)
+        self._hyst_pct = hyst_pct            # None → read live settings (tests inject a fixed band)
         self._webhook_to = to                # None → read live settings (which member the event wakes)
         self._sweep = sweep or _default_orphan_sweep  # called (symbol, asof_ms) on a vanished position
 
@@ -105,6 +139,12 @@ class Monitor:
             return float(self._step_pct)
         from .config import settings
         return float(settings.monitor_step_pct)
+
+    def _hyst(self) -> float:
+        if self._hyst_pct is not None:
+            return float(self._hyst_pct)
+        from .config import settings
+        return float(settings.monitor_hyst_pct)
 
     def _to(self) -> str:
         if self._webhook_to is not None:
@@ -177,8 +217,12 @@ class Monitor:
             roi, upnl = derived_roi(b["entry"], b["qty"], b["margin"], mark)
             if roi is None:
                 return
-            new = bucket(roi, self._step())
-            if self.buckets.get(symbol) == new:
+            armed = self.buckets.get(symbol)
+            # Dead-band re-bucket against the armed bucket: chatter around a step
+            # line holds; a missing baseline (never seeded) buckets raw, as before.
+            new = bucket(roi, self._step()) if armed is None \
+                else hyst_bucket(roi, armed, self._step(), self._hyst())
+            if armed == new:
                 return
             self.buckets[symbol] = new
             side, entry = b["side"], b["entry"]

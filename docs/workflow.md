@@ -154,12 +154,14 @@ runtime 改任何 worker 的 cron 與指令——他的方向盤；動之前先 
 由它推 webhook 喚醒 friday。市場平靜 → agent 睡、不燒 token。
 
 - **兩種事件**（`events.py`）：
-  - `position_pnl` — 持倉 ROI 每跨一個 5% bucket（`MONITOR_STEP_PCT`）通報一次；喚醒誰由
+  - `position_pnl` — 持倉 ROI 每跨一個 5% bucket（`MONITOR_STEP_PCT`）通報一次，跨線帶
+    ±`MONITOR_HYST_PCT`（預設 1%）防抖遲滯：要多走 1% 才算真的跨、通知後脫離該檔位擴張
+    區間才重新武裝——**ROI 貼著警戒線震盪只會通知一次**。喚醒誰由
     `MONITOR_WEBHOOK_TO` 決定（預設且現行 `leader` → friday，由他對照 standing rules 與
     持倉理由處理）。
   - `price_alert` — friday 設的價格/波動提醒觸發（one-shot，觸發即失效；固定 `to:"leader"`）。
   - 兩者 payload 自帶數字 + `suggested_action`，woken 的 agent 第一回合就能行動。
-  - **去重**：monitor「跨 bucket 才發」、alert「觸發一次」——ws 與輪詢同時跑也不重複。
+  - **去重**：monitor「跨 bucket 才發 + 遲滯帶」、alert「觸發一次」——ws 與輪詢同時跑也不重複。
   - **可觀測性**：每一次投遞失敗（URL 空白 / swarm 拒收 / 不可達）都會留 warning log；
     引擎啟動時 probe swarm 的 `/healthz`，不可達就大聲警告（事件會被丟棄並記錄）。
 - **cron 安全網**（見 §3 表）：friday 30m 例行巡檢「不是輪詢」，是 webhook 失靈時的保底；

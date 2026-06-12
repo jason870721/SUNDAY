@@ -45,6 +45,12 @@ def _restore_monitor_config() -> None:
             settings.monitor_step_pct = float(step)
         except ValueError:
             pass
+    hyst = store.kv_get("monitor_hyst_pct")
+    if hyst is not None:
+        try:
+            settings.monitor_hyst_pct = float(hyst)
+        except ValueError:
+            pass
 
 
 async def _check_webhook_reachable() -> None:

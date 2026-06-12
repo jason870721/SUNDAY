@@ -95,7 +95,8 @@ class TestRefreshBookBaselines(unittest.TestCase):
         # The poll path is the ws fallback: a real crossing seen only at refresh time
         # must still notify (same position, mark moved a full step).
         seen = []
-        mon = M.Monitor(notify=lambda ev: seen.append(ev["data"]["roi_pct"]), step_pct=5.0, to="leader")
+        mon = M.Monitor(notify=lambda ev: seen.append(ev["data"]["roi_pct"]), step_pct=5.0, to="leader",
+                        hyst_pct=0.0)   # the subject here is the poll path, not the dead band
         with mock.patch.object(exchange, "fetch_positions",
                                return_value=[_pos(entry="100.0", amt="1.0", mark="100.0", lev="1")]):
             mon.refresh_book(seed=True)

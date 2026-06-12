@@ -62,11 +62,11 @@ class _ConfigStub:
     default notifiers (`_default_alert_notify` / `_default_position_notify`) run against
     our receiver instead of needing a loaded Settings object."""
 
-    def __init__(self, url: str, step_pct: float = 5.0):
+    def __init__(self, url: str, step_pct: float = 5.0, hyst_pct: float = 1.0):
         self._mod = types.ModuleType("sunday.config")
         self._mod.settings = types.SimpleNamespace(
-            evva_webhook_url=url, monitor_step_pct=step_pct, monitor_enabled=True,
-            monitor_webhook_to="leader")
+            evva_webhook_url=url, monitor_step_pct=step_pct, monitor_hyst_pct=hyst_pct,
+            monitor_enabled=True, monitor_webhook_to="leader")
         self._prev = sys.modules.get("sunday.config")
 
     def __enter__(self):
@@ -188,14 +188,15 @@ class TestEngineProductionPath(unittest.TestCase):
     def test_monitor_default_notifier_delivers(self):
         from sunday import monitor
         with _ConfigStub(self.rx.url):
-            mon = monitor.Monitor()              # production default notifier + config step
+            mon = monitor.Monitor()              # production default notifier + config step/hyst
             mon.book["BTCUSDT"] = {"side": "long", "entry": 100.0, "qty": 1.0, "margin": 100.0, "mark": 100.0}
             mon.buckets["BTCUSDT"] = 0
-            mon.on_mark("BTCUSDT", 105.0)        # +5% ROI → crosses a bucket → real webhook
+            mon.on_mark("BTCUSDT", 105.0)        # +5%: on the line but inside the dead band → quiet
+            mon.on_mark("BTCUSDT", 106.0)        # +6% = step+hyst → the real crossing → webhook
         self.assertEqual(len(self.rx.received), 1, "bucket crossing did not deliver a webhook")
         p = self.rx.received[0]["json"]
         self.assertEqual(p["data"]["event_type"], "position_pnl")
-        self.assertEqual(p["data"]["roi_pct"], 5.0)
+        self.assertEqual(p["data"]["roi_pct"], 6.0)
         self.assertEqual(p["to"], "leader")
 
 

@@ -26,7 +26,8 @@
 6. **純邏輯 stdlib-only、可在任何環境單元測試**（indicators / pagination / alerts 規則 / monitor 數學 /
    indices parsers / events builders）。重依賴（ccxt/fastapi/config）一律**惰性 import**，別在模組頂層。
 7. **realtime 用 websocket + 輪詢備援**：`pricehub.Realtime` 跑 ws mark-price 串流（testnet 餵倉位監控、
-   mainnet 餵價格提醒）+ 每 `MONITOR_POLL_SEC` 輪詢備援。monitor 以「跨 bucket 才發」、alert「觸發一次」，
+   mainnet 餵價格提醒）+ 每 `MONITOR_POLL_SEC` 輪詢備援。monitor 以「跨 bucket 才發 + ±`MONITOR_HYST_PCT`
+   遲滯帶（跨線要多走 1% 才算、通知後脫離擴張區間才重新武裝——邊界震盪不重發）」、alert「觸發一次」，
    故 ws 與輪詢同時跑也不會重複通知。
 8. **兩條對外通道（milestone-8 擴充）**：(a) **evva swarm webhook**（agent-facing，不變）：
    Sunday → evva swarm（`events.post` → `EVVA_WEBHOOK_URL`），事件 `position_pnl` / `price_alert`，
@@ -105,6 +106,11 @@ engine/sunday/
   `/api/perp/close` 平倉即清 + monitor 輪詢偵測倉位消失時清（帶 server-clock 戳記，不誤殺同窗
   重開倉的新腿）（BUG-02）；(3) 稽核帳本：`/api/perp` 寫入帶 `X-Agent` 記入 order_log
   agent/action 欄，account 訂單/成交查詢回 `agent` 並可 `?agent=` 過濾（BUG-03）。
+- **monitor 防抖遲滯帶（2026-06-12）**：`hyst_bucket()` Schmitt-trigger 機制——跨 step 線要再
+  越過 `MONITOR_HYST_PCT`（預設 1%）才開火，且通知後 armed bucket 撐到 ROI 脫離「該檔位 ±hyst
+  擴張區間」才重新定檔；ROI 貼著警戒線（±5% 等）來回震盪由「每穿越一發」變「一次脫離一發」。
+  執行期可調（`POST /api/monitor/config` 的 `hyst_pct`，0=關，kv 持久化）；`hyst=0` 與舊語義
+  位元等價（PRD-004 行為不變）。
 - **PRD-005 已修復（2026-06-11）**：indicators 路徑套上 `ttlcache.StaleCache`（TTL 隨 interval
   比例、上游故障供應 last-good + `stale: true`）——調查證實程式無 1h 特定路徑，缺陷是上游
   卡頓無退化策略；新 cache 模組可給其他唯讀路徑重用（markets router 是同語義的前例）。

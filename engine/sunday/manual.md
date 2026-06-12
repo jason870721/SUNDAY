@@ -154,11 +154,13 @@ curl -sX DELETE http://127.0.0.1:7777/api/alerts/<id>
 
 ```bash
 curl -s http://127.0.0.1:7777/api/monitor                  # 目前監控中的倉位 + ROI% + step + 設定
-curl -sX POST http://127.0.0.1:7777/api/monitor/config -d '{"step_pct":5,"enabled":true}'
+curl -sX POST http://127.0.0.1:7777/api/monitor/config -d '{"step_pct":5,"hyst_pct":1,"enabled":true}'
 ```
 
 Sunday 自動監控**每一個**開倉倉位（websocket 即時報價 + 輪詢備援），當某倉位的 ROI%
 每跨越一個 `step_pct`（預設 5%）就送一次 webhook 給 swarm。**無需手動訂閱。**
+**防抖**：跨線要再越過 `hyst_pct`（預設 1%）才算數，且通知後要脫離該檔位 ±`hyst_pct`
+才會重新武裝——ROI 貼著 ±5% 來回震盪只會通知一次，不會每次穿越都發（`hyst_pct:0` 可關）。
 
 ## 工作日誌 `/api/journal`（reviewer 寫日報 → User 在 UI 看）
 

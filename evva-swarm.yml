@@ -30,7 +30,8 @@ workdir: .
 # (memory boards / journal / reports) stay on http_request by design.
 #
 # Wake discipline: friday is primarily EVENT-driven — Sunday webhooks every 5% position-PnL
-# step and triggered price alerts to the leader (MONITOR_WEBHOOK_TO stays "leader"), and
+# step (hysteresis-debounced: chatter around a step line fires once, not per wiggle)
+# and triggered price alerts to the leader (MONITOR_WEBHOOK_TO stays "leader"), and
 # teammates send_message him. The cron schedules below are SAFETY-NET routines (periodic
 # patrol / review), NOT market polling. friday may retune any worker's cadence at runtime
 # via schedule_set (his steering wheel — check list_members first).
