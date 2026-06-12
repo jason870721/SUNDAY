@@ -9,6 +9,9 @@ workdir: .
 #   trader           = EXECUTION DESK — turns friday's tickets into positions via /api/perp:
 #                      pre-flight against the consensus, place with mandatory TP/SL, verify
 #                      fills + protection legs, manage in-position standing rules, reconcile.
+#   evva (persona)   = RESIDENT ENGINEER — friday's software-change tickets for Sunday
+#                      (PRD implementation, bug fixes): implement → tests green → commit
+#                      main → RUNBOOK restart → verify /health → report back. No trading.
 #   analyst-flow     = technicals / perp microstructure / world indices.
 #   analyst-news     = tactical news/events on the current watchlist (+ global watch).
 #   researcher       = strategic frontier exploration, 3×/day, feeds NEW directions.
@@ -38,6 +41,11 @@ workers:
     schedule:
       cron: "15,45 * * * *" # staggered vs friday's :00/:30 patrol — execution hygiene, not market polling
       prompt: "執行台例行巡檢（保護腿完整性，非行情輪詢）：① 看記憶索引接上 standing rules 與在途事項（standing rules 的權威版在 GET /api/memory/friday 的憲法）；② GET /api/account/positions 驗每倉 protection——stop_loss:false 或 sl_qty_covers:false 立刻補齊（修復後回報 friday 與 risk-monitor）、null 就去 /api/account/orders/open 確認；③ 對照 /api/account/orders/open 撤掉已平倉標的的孤兒 TP/SL 掛單；④ my_tasks 看有沒有 friday 的新 ticket 或未完成的執行；⑤ standing rules 觸發條件成立的照規則執行並回報。在途事項或教訓有變就更新自己的記憶目錄；都正常就一句 stand down。"
+  - persona: evva            # 特派工程師 — friday 的 Sunday 軟體改動需求由他實作（PRD 票/bug 修復）
+    model: deepseek-v4-pro
+    effort: ultra
+    when_to_use: "特派工程師 — 接 friday 的 Sunday 軟體改動 ticket（PRD 實作、bug 修復）：實作 → 測試綠 → commit main → 照 RUNBOOK 部署重啟 → 驗 /health → 回報。不下單、不碰交易。"
+    # 不設 schedule：純 ticket/訊息驅動（task_assign 即喚醒）；工程量低頻，cron 只會空燒 token
   - agent: analyst-flow
     schedule:
       cron: "*/10 * * * *" # every 10 mins
@@ -73,7 +81,9 @@ settings:
   max_iterations: 99
   # Operating fuses for an unattended 7×24 team (see the evva swarm guide §8):
   daily_budget_tokens: -1        # negative normalizes to 0 = UNLIMITED (operator choice); cap individual members via budget_tokens if needed
-  stall_hard_timeout: "30m"      # a run busy >30m is cancelled (mail re-queued, nothing lost); stall warning stays at the 10m default
+  stall_hard_timeout: "2h"       # a run busy >2h is cancelled (mail re-queued, nothing lost); raised from 30m for the
+                                 # resident engineer's long code/test/deploy runs — patrols never came near 30m anyway;
+                                 # stall warning stays at the 10m default
   # Workflow watchdogs (wave-5 RP-22): nudge friday when the BOARD stalls (vs RP-14's run stalls).
   task_stale_threshold: "12h"    # task sitting in running/verifying >12h → one nudge to friday (researcher's 8h wake cadence is the longest legit lag)
   mailbox_stale_threshold: "30m" # unread mail older than 30m → operator alert (members wake on message; backlog = something is wrong)
