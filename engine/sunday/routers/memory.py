@@ -6,7 +6,7 @@ What remains here are the two docs that are deliberately PUBLISHED — cross-age
 User also reads on the dashboard Memory tab:
 
 - ``friday``     — the team constitution: risk consensus, watchlist, position theses, standing
-                   rules. trader pre-flights against it, risk-monitor patrols against it.
+                   rules. friday pre-flights his own orders against it, risk-monitor patrols against it.
 - ``researcher`` — the research log: dated leads/ideas the User and friday browse.
 
 Pattern unchanged: ``GET`` the whole doc, edit, ``PUT`` it back (whole-doc overwrite).

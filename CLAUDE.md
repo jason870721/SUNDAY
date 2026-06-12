@@ -80,13 +80,29 @@ engine/sunday/
 
 ## 現況
 
+- **milestone-9 = sunday-mcp sidecar（typed MCP 工具通道，混合制）**（見
+  [docs/prd/milestone-9/README.md](docs/prd/milestone-9/README.md)，S1–S7 新增不變量先讀）：
+  `engine/sunday_mcp/` 無狀態 sidecar（`python -m sunday_mcp`，:7780/mcp → :7777，金鑰永不進
+  sidecar），22 個工具 = 13 唯讀 + 8 寫入 + ping，外加 `sunday://manual` resource。寫入 schema
+  強制 `agent`/`take_profit`/`stop_loss`/`memo`（裸單不可表達）；`validate.py` 純函式交叉驗證；
+  寫入零自動重試、連線失敗回 placed-or-not UNKNOWN。`http_request` + `/manual` 永遠是降級通道
+  （S6）；kill-switch = `.evva/settings.json` 設 `disabled:true` 重啟 swarm。Phase 1–3 已交付
+  （單測 + testnet 全鏈路 smoke 綠）；Phase 4 上線中（settings/prompts/RUNBOOK §10/manual MCP 節
+  已 commit，兩週評估與裁決見 PRD-9.4）。
 - **milestone-6 = agent-native proxy（地基，現行）。** **milestone-8 = 韌性 / 黑金 UI / Telegram**
   （見 [docs/prd/milestone-8/README.md](docs/prd/milestone-8/README.md)）：
   (1) Binance `-1021` 時鐘偏移加固（`_signed` round-trip 校時 + 落後安全偏壓 + recvWindow 10s +
   自癒重試；ccxt `trade_ex` 開 `adjustForTimeDifference`）；(2) 前端改黑金配色、全面 responsive
   不跑版（`.split`/`.split-r` + 側欄抽屜）；(3) `telegram.py` 把 report / 提醒 / 持倉損益推 User 手機。
-- **153 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
+- **187 單元測試綠**（含 telegram formatter、webhook 投遞失敗 log / boot probe、
   protection 風控數學與 equity 快照測試）；前端 `vue-tsc` + `vite build` 綠、`dist/` 已重建。
+- **BUG-01～04 已修復（2026-06-12，見 docs/prd/bug-report/）**：(1) TP/SL 腿改
+  `workingType=MARK_PRICE` + 下單/protection 前置觸發區驗證——根因是預設 CONTRACT_PRICE 用
+  **測試網成交價**判定觸發（與 agent 決策依據的主網價脫鉤），且 Algo Service 對已在觸發區的腿
+  不回 -2021 而是直接成交 = 一掛即市價平倉（BUG-01/04）；(2) 倉位歸零自動撤孤兒 TP/SL 腿：
+  `/api/perp/close` 平倉即清 + monitor 輪詢偵測倉位消失時清（帶 server-clock 戳記，不誤殺同窗
+  重開倉的新腿）（BUG-02）；(3) 稽核帳本：`/api/perp` 寫入帶 `X-Agent` 記入 order_log
+  agent/action 欄，account 訂單/成交查詢回 `agent` 並可 `?agent=` 過濾（BUG-03）。
 - **PRD-005 已修復（2026-06-11）**：indicators 路徑套上 `ttlcache.StaleCache`（TTL 隨 interval
   比例、上游故障供應 last-good + `stale: true`）——調查證實程式無 1h 特定路徑，缺陷是上游
   卡頓無退化策略；新 cache 模組可給其他唯讀路徑重用（markets router 是同語義的前例）。
@@ -97,14 +113,14 @@ engine/sunday/
   從此不在 `/fapi/v1/openOrders`。`exchange.py` 讀取/撤單改兩本訂單簿合併（`algoorders.py`
   純映射，腿帶 `algo: true`），`-2011` 自動轉打 algo 簿；新增 `GET/POST /api/perp/protection`
   （先掛新腿、後撤舊腿）；`ccxt>=4.5.57` 釘版（舊版 -4120 拒掛）。
-- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 8 workers）採**決策/執行分離**：
-  friday = 指揮官/PM（order ticket + 調度 + 驗收），trader = 執行台（下單/管倉/對帳；
-  `MONITOR_WEBHOOK_TO=trader` 可把 position_pnl 事件直達執行台）。**evva 以 persona member
-  （evva RP-29 功能）駐隊擔任特派工程師**：接 friday 的 PRD/bug ticket → 實作 → 測試綠 →
-  commit main → 照 RUNBOOK 重啟 → 驗 `/health` → 回報；行規見 repo 根的 `EVVA.md`（整合設計：
-  docs/superpowers/specs/2026-06-11-evva-engineer-onboarding-design.md）。
+- swarm 消費端（`evva-swarm.yml` + `agents/`：1 leader friday + 6 workers）：**交易權集中在
+  friday 一人**（2026-06-12 裁撤 trader 執行台——決策/執行分離造成「持有 vs 平倉」雙頭打架）：
+  friday = 指揮官/PM + 唯一下單者（決策 + 親自執行 `/api/perp`、管倉對帳、調度驗收），
+  risk-monitor 是唯一外部煞車；`position_pnl` webhook 一律喚醒 leader（`MONITOR_WEBHOOK_TO`
+  維持預設 `leader`）。
 - **已對齊 evva 第五波（RP-19~28）**：工具教學/deferred 公告/injection 防線/記憶協議由框架
   注入，persona 只寫人設與行規；成員私人記憶原生化（`agents/…/<name>/memory/`，已 gitignore），
-  `/api/memory` 收斂為兩塊公告板（friday 憲法 + researcher 研究日誌）；risk-monitor 用
-  `task_propose` 把缺陷修復放上看板；共享 skills 在 `agents/skills/`（friday 可 `skill_publish`）。
+  `/api/memory` 收斂為兩塊公告板（friday 憲法 + researcher 研究日誌）；risk-monitor 的缺陷
+  告警直達 friday 並用鬧鐘追蹤（交易權集中後不再向執行台開看板提案）；共享 skills 在
+  `agents/skills/`（friday 可 `skill_publish`）。
   系統協作全景見 [docs/workflow.md](docs/workflow.md)。

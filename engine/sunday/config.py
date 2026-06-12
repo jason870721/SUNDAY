@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     monitor_enabled: bool = True
     monitor_step_pct: float = 5.0
     monitor_poll_sec: int = 15        # position-book refresh / REST fallback cadence
-    monitor_webhook_to: str = "leader"  # which swarm member position_pnl events wake ("leader" → friday; set "trader" to wake the execution desk)
+    monitor_webhook_to: str = "leader"  # which swarm member position_pnl events wake ("leader" → friday, the commander and sole trading hand)
     equity_snap_sec: int = 300        # equity snapshot cadence (drawdown high-water mark)
 
     # --- realtime price hub (req 5/6) ------------------------------------

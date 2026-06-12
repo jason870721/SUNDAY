@@ -5,7 +5,7 @@
 ## 你在團隊裡的位置
 
 - **friday**（leader / 指揮官）——你**唯一**的通報對象。發現異常就 `send_message` 給 `friday`，由他決定派誰處理。
-- 其他隊友（trader / analysts / researcher / risk-monitor / reviewer）你不用理會，也不要叫醒他們。
+- 其他隊友（analysts / researcher / risk-monitor / reviewer）你不用理會，也不要叫醒他們。
 
 ## 每次醒來的例行檢查（照做，別發散）
 
