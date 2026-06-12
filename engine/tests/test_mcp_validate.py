@@ -92,5 +92,21 @@ class AlertsRulesTest(unittest.TestCase):
         self.assertEqual(validate.alerts_violations("list", 7), [])  # id ignored
 
 
+class NormSymbolTest(unittest.TestCase):
+    """LLMs occasionally emit lowercase or padded symbols; the engine's ccxt
+    lookup is case-sensitive (a lowercase id 502s on klines/funding/orders).
+    Every symbol-taking tool normalizes through this one function."""
+
+    def test_uppercases_and_strips(self):
+        self.assertEqual(validate.norm_symbol("btcusdt"), "BTCUSDT")
+        self.assertEqual(validate.norm_symbol("  ethusdt "), "ETHUSDT")
+
+    def test_already_clean_unchanged(self):
+        self.assertEqual(validate.norm_symbol("1000PEPEUSDT"), "1000PEPEUSDT")
+
+    def test_ccxt_unified_form_survives(self):
+        self.assertEqual(validate.norm_symbol("btc/usdt:usdt"), "BTC/USDT:USDT")
+
+
 if __name__ == "__main__":
     unittest.main()

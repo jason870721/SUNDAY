@@ -114,7 +114,7 @@ def build_server() -> FastMCP:
     def market_get(symbol: str) -> str:
         """One market: live ticker + the numbers every order must respect —
         price/qty precision, min/max qty, min notional, max leverage, fees."""
-        return _shaped(_call("GET", f"/api/markets/{symbol.upper()}"),
+        return _shaped(_call("GET", f"/api/markets/{validate.norm_symbol(symbol)}"),
                        shaping.shape_market_detail)
 
     @mcp.tool(annotations=_READONLY)
@@ -128,8 +128,8 @@ def build_server() -> FastMCP:
         """OHLCV candles as CSV rows (ts,open,high,low,close,volume), oldest
         first, mainnet prices. For indicator values use the `indicators` tool
         instead of recomputing from raw candles."""
-        q = {"symbol": symbol, "interval": interval, "limit": limit,
-             "start": start, "end": end}
+        q = {"symbol": validate.norm_symbol(symbol), "interval": interval,
+             "limit": limit, "start": start, "end": end}
         return _shaped(_call("GET", "/api/klines", query=q), shaping.shape_klines)
 
     @mcp.tool(annotations=_READONLY)
@@ -143,7 +143,8 @@ def build_server() -> FastMCP:
         rsi, ema(20/50), sma(20/50), macd, bollinger(+z), adx, atr — `set` is a
         comma list. A `⚠ stale` first line means the engine served last-good
         data after an upstream stall (usable, but not live)."""
-        q = {"symbol": symbol, "interval": interval, "set": set, "limit": limit}
+        q = {"symbol": validate.norm_symbol(symbol), "interval": interval,
+             "set": set, "limit": limit}
         return _shaped(_call("GET", "/api/klines/indicators", query=q),
                        shaping.shape_indicators)
 
@@ -155,11 +156,12 @@ def build_server() -> FastMCP:
     ) -> str:
         """Perp funding: current rate + mark/index + next funding time (positive
         rate = longs pay shorts). `history=true` lists past periods, newest first."""
+        sym = validate.norm_symbol(symbol)
         if history:
-            q = {"symbol": symbol, "page": page, "page_size": 30}
+            q = {"symbol": sym, "page": page, "page_size": 30}
             return _shaped(_call("GET", "/api/funding/history", query=q),
                            shaping.shape_funding_history)
-        return _shaped(_call("GET", "/api/funding", query={"symbol": symbol}),
+        return _shaped(_call("GET", "/api/funding", query={"symbol": sym}),
                        shaping.shape_funding)
 
     @mcp.tool(annotations=_READONLY)
@@ -174,11 +176,12 @@ def build_server() -> FastMCP:
     # ── account (testnet) ─────────────────────────────────────────────────────
 
     @mcp.tool(annotations=_READONLY)
-    def positions() -> str:
+    def positions(page: Annotated[int, Field(ge=1)] = 1) -> str:
         """Open testnet positions, one line each: side/qty/entry/mark/ROI%/leverage/
         margin mode/liquidation distance/TP-SL protection verdict/memo.
         SL✗(naked) or SL△(partial) means the position is not fully protected."""
-        r = _call("GET", "/api/account/positions", query={"page_size": 50})
+        r = _call("GET", "/api/account/positions",
+                  query={"page": page, "page_size": 50})
         return _shaped(r, shaping.shape_positions)
 
     @mcp.tool(annotations=_READONLY)
@@ -211,7 +214,8 @@ def build_server() -> FastMCP:
     ) -> str:
         """Open (resting) orders incl. untriggered TP/SL legs, newest first:
         id/side/type/price-or-trigger/qty/status/flags [TP SL algo RO]/agent."""
-        q = {"symbol": symbol, "page": page, "page_size": 30}
+        q = {"symbol": validate.norm_symbol(symbol) if symbol else None,
+             "page": page, "page_size": 30}
         return _shaped(_call("GET", "/api/account/orders/open", query=q),
                        shaping.shape_orders)
 
@@ -223,7 +227,8 @@ def build_server() -> FastMCP:
     ) -> str:
         """Order history for one symbol (filled/cancelled/conditional incl. algo
         legs), newest first. `agent` filters to one operator's orders."""
-        q = {"symbol": symbol, "page": page, "page_size": 30, "agent": agent}
+        q = {"symbol": validate.norm_symbol(symbol), "page": page,
+             "page_size": 30, "agent": agent}
         return _shaped(_call("GET", "/api/account/orders", query=q),
                        shaping.shape_orders)
 
@@ -235,7 +240,8 @@ def build_server() -> FastMCP:
     ) -> str:
         """Fill history for one symbol with realized PnL per fill + a page total,
         newest first. `agent` filters to one operator's fills."""
-        q = {"symbol": symbol, "page": page, "page_size": 50, "agent": agent}
+        q = {"symbol": validate.norm_symbol(symbol), "page": page,
+             "page_size": 50, "agent": agent}
         return _shaped(_call("GET", "/api/account/trades", query=q),
                        shaping.shape_trades)
 
@@ -245,7 +251,8 @@ def build_server() -> FastMCP:
         leg of each kind (id/trigger/status), ladder counts, and whether the SL
         quantity covers the position. ORPHAN LEGS in the output = triggers with
         no position behind them — cancel them."""
-        return _shaped(_call("GET", "/api/perp/protection", query={"symbol": symbol}),
+        return _shaped(_call("GET", "/api/perp/protection",
+                             query={"symbol": validate.norm_symbol(symbol)}),
                        shaping.shape_protection_status)
 
     # ── trading writes (testnet; PRD-9.3 — schema is the law) ─────────────────
@@ -274,7 +281,7 @@ def build_server() -> FastMCP:
         _reject(validate.order_violations(side=side, type=type, qty=qty,
                                           notional_usd=notional_usd, price=price,
                                           take_profit=take_profit, stop_loss=stop_loss))
-        body = {"symbol": symbol, "side": side, "type": type,
+        body = {"symbol": validate.norm_symbol(symbol), "side": side, "type": type,
                 "take_profit": take_profit, "stop_loss": stop_loss, "memo": memo,
                 "qty": qty, "notional_usd": notional_usd, "price": price,
                 "leverage": leverage, "margin_mode": margin_mode}
@@ -287,7 +294,7 @@ def build_server() -> FastMCP:
         the engine then sweeps the now-orphaned TP/SL trigger legs and reports
         them as `cancelled protection legs`."""
         return _write("POST", "/api/perp/close", agent, shaping.shape_close_result,
-                      body={"symbol": symbol})
+                      body={"symbol": validate.norm_symbol(symbol)})
 
     @mcp.tool()
     def set_protection(
@@ -302,7 +309,8 @@ def build_server() -> FastMCP:
         cancels the old legs of that kind — the position is never naked
         mid-swap. Give at least one trigger."""
         _reject(validate.protection_violations(take_profit, stop_loss))
-        body = {"symbol": symbol, "take_profit": take_profit, "stop_loss": stop_loss}
+        body = {"symbol": validate.norm_symbol(symbol),
+                "take_profit": take_profit, "stop_loss": stop_loss}
         return _write("POST", "/api/perp/protection", agent,
                       shaping.shape_protection_result,
                       body={k: v for k, v in body.items() if v is not None})
@@ -312,7 +320,8 @@ def build_server() -> FastMCP:
         """Cancel ONE resting order by id — works for both books (regular and
         algo/conditional: the engine retries the algo book on -2011)."""
         return _write("DELETE", f"/api/perp/order/{order_id}", agent,
-                      shaping.shape_cancel_result, query={"symbol": symbol})
+                      shaping.shape_cancel_result,
+                      query={"symbol": validate.norm_symbol(symbol)})
 
     @mcp.tool(annotations=_DESTRUCTIVE)
     def cancel_all_orders(agent: AgentParam, symbol: str) -> str:
@@ -320,7 +329,8 @@ def build_server() -> FastMCP:
         protection legs: a remaining position is naked afterwards (re-attach
         via set_protection). For one order use cancel_order instead."""
         return _write("DELETE", "/api/perp/orders", agent,
-                      shaping.shape_cancel_all_result, query={"symbol": symbol})
+                      shaping.shape_cancel_all_result,
+                      query={"symbol": validate.norm_symbol(symbol)})
 
     @mcp.tool()
     def set_leverage_margin(
@@ -336,6 +346,7 @@ def build_server() -> FastMCP:
         _reject(validate.leverage_margin_violations(leverage, margin_mode))
         margin = lev = None
         margin_err = lev_err = None
+        symbol = validate.norm_symbol(symbol)
         if margin_mode is not None:
             try:
                 r = client.call("POST", "/api/perp/margin-mode", agent=agent,
@@ -368,7 +379,8 @@ def build_server() -> FastMCP:
         """Set a price alert (mainnet prices). pct_move captures the current
         price as its reference at creation. An alert fires ONCE (webhook +
         Telegram), then flips to status=triggered."""
-        body = {"symbol": symbol, "kind": kind, "threshold": threshold, "note": note}
+        body = {"symbol": validate.norm_symbol(symbol), "kind": kind,
+                "threshold": threshold, "note": note}
         return _write("POST", "/api/alerts", agent, shaping.shape_alert_created,
                       body={k: v for k, v in body.items() if v is not None})
 

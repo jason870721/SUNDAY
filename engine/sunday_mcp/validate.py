@@ -14,6 +14,15 @@ holds no market view (S1), so those rules exist on exactly one side.
 from __future__ import annotations
 
 
+def norm_symbol(symbol: str) -> str:
+    """Uppercase + strip a symbol id. LLM callers occasionally emit lowercase
+    ("btcusdt"); the engine's ccxt market lookup is case-sensitive, so a raw
+    lowercase id 502s on klines/funding/orders. Binance USDⓈ-M ids are
+    uppercase, so this is lossless; every symbol-taking tool routes through
+    here (server.py) so the channel never trips on case."""
+    return symbol.strip().upper()
+
+
 def order_violations(side: str, type: str, qty: float | None,
                      notional_usd: float | None, price: float | None,
                      take_profit: float | None, stop_loss: float | None) -> list[str]:
