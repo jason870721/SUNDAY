@@ -247,6 +247,9 @@ class IndicesTest(unittest.TestCase):
         self.assertIn("BTC dominance: 54.2%", out)
         self.assertIn("as_of 1718064000000", out)
 
+    def test_empty(self):
+        self.assertEqual(shaping.shape_indices({"items": []}), "no indices available")
+
 
 class BalancePnlTest(unittest.TestCase):
     def test_balance_line(self):
@@ -275,6 +278,14 @@ class BalancePnlTest(unittest.TestCase):
                                          pnl_error="[sunday 502] exchange error")
         self.assertIn("pnl: [sunday 502] exchange error", out)  # partial failure shown
         self.assertIn("samples 3 (short history — low confidence)", out)
+
+    def test_flat_account(self):
+        out = shaping.shape_pnl_drawdown(
+            {"equity": 10000.0, "unrealized_pnl": 0.0, "total_notional": 0.0,
+             "exposure_pct": 0.0, "positions": []},
+            {"drawdown_pct": 0.0, "high_water": 10000.0,
+             "high_water_ts": 1718000000000, "samples": 1000})
+        self.assertIn("no open positions", out)
 
     def test_budget_many_positions(self):
         rows = [{"symbol": "BTCUSDT", "side": "short", "notional": 123456.789,
@@ -367,6 +378,101 @@ class ProtectionStatusTest(unittest.TestCase):
             "symbol": "ETHUSDT", "position": None, "take_profit": None,
             "stop_loss": None, "tp_legs": 0, "sl_legs": 0, "sl_qty_covers": None})
         self.assertEqual(out, "ETHUSDT: flat — no position, no trigger legs")
+
+
+class BudgetTest(unittest.TestCase):
+    """Worst-LEGAL-input budget locks — every Phase 2 tool stays < 60k chars (S3).
+
+    klines×500 / orders×30 / trades×50 / pnl_drawdown live in their own classes
+    above; this class covers the remaining tools so each one has a budget test.
+    Row counts mirror the schema page-size caps in server.py — raising a cap
+    there without growing the matching case here must fail review.
+    """
+
+    BUDGET = 60_000
+    W = 123456.7890123456  # widest float fmt_price will render
+    SYM = "1000000BABYDOGEUSDT"  # longest real USDⓈ-M symbol shape
+
+    def test_markets_page(self):
+        row = {"symbol": self.SYM, "last": self.W, "change_pct": -123.45,
+               "quote_volume": 987_654_321_098.7}
+        out = shaping.shape_markets(_envelope([row] * 20, total=400, has_more=True))
+        self.assertLess(len(out), self.BUDGET)
+
+    def test_market_detail(self):
+        out = shaping.shape_market_detail({
+            "symbol": self.SYM,
+            "ticker": {"last": self.W, "bid": self.W, "ask": self.W, "high": self.W,
+                       "low": self.W, "change_pct": -123.45,
+                       "quote_volume": 987_654_321_098.7},
+            "info": {"precision": {"price": 0.0000001, "amount": 0.0000001},
+                     "contract_size": self.W,
+                     "limits": {"amount": {"min": 0.0000001, "max": self.W},
+                                "cost": {"min": self.W, "max": None}},
+                     "max_leverage": 125, "maker": 0.0001234, "taker": 0.0005678,
+                     "active": True},
+        })
+        self.assertLess(len(out), self.BUDGET)
+
+    def test_indicators_full_set(self):
+        panel = {
+            "rsi": self.W, "adx": self.W, "atr": self.W,
+            "ema": {"ema20": self.W, "ema50": self.W},
+            "sma": {"sma20": self.W, "sma50": self.W},
+            "macd": {"macd": self.W, "signal": self.W, "hist": self.W},
+            "bollinger": {k: self.W for k in ("mid", "upper", "lower", "sd", "z")},
+        }
+        out = shaping.shape_indicators({"symbol": self.SYM, "interval": "1M",
+                                        "as_of": 1718064000000, "last_close": self.W,
+                                        "indicators": panel,
+                                        "stale": True, "stale_age_s": 12345.6})
+        self.assertLess(len(out), self.BUDGET)
+
+    def test_funding_current_and_history_page(self):
+        cur = shaping.shape_funding({"symbol": self.SYM, "rate": -0.00012345,
+                                     "mark": self.W, "index": self.W,
+                                     "next_funding_ts": 1718064000000,
+                                     "interval_hours": 8})
+        self.assertLess(len(cur), self.BUDGET)
+        hist = shaping.shape_funding_history(_envelope(
+            [{"ts": 1718064000000, "rate": -0.00012345}] * 30,
+            total=1000, has_more=True))
+        self.assertLess(len(hist), self.BUDGET)
+
+    def test_indices_snapshot(self):
+        item = {"key": "btc-dominance", "label": "US Dollar Index (DXY)",
+                "available": True, "value": self.W, "unit": "%",
+                "classification": "Extreme Greed", "change_pct": -99.999,
+                "stale": True}
+        out = shaping.shape_indices({"items": [item] * 8})
+        self.assertLess(len(out), self.BUDGET)
+
+    def test_positions_page(self):
+        # 50 rows = the page size the positions tool requests; memo at the
+        # engine's 300-char cap (clip() trims it to MEMO_MAX per row)
+        row = _pos(symbol=self.SYM, qty=self.W, entry=self.W, mark=self.W,
+                   roi_pct=-1234.56, leverage=125, liq_distance_pct=99.99,
+                   protection={"take_profit": True, "stop_loss": True,
+                               "sl_qty_covers": False},
+                   memo="長" * 300)
+        out = shaping.shape_positions(_envelope([row] * 50, total=60, has_more=True))
+        self.assertLess(len(out), self.BUDGET)
+
+    def test_balance_line(self):
+        out = shaping.shape_balance({"equity": self.W, "wallet": self.W,
+                                     "free": self.W, "used": self.W,
+                                     "unrealized_pnl": -self.W})
+        self.assertLess(len(out), self.BUDGET)
+
+    def test_protection_status(self):
+        leg = {"id": "9" * 20, "trigger_price": self.W, "status": "partially_filled"}
+        out = shaping.shape_protection_status({
+            "symbol": self.SYM,
+            "position": {"side": "short", "qty": self.W, "entry": self.W,
+                         "mark": self.W, "leverage": 125},
+            "take_profit": leg, "stop_loss": leg,
+            "tp_legs": 99, "sl_legs": 99, "sl_qty_covers": False})
+        self.assertLess(len(out), self.BUDGET)
 
 
 class FmtPhase2Test(unittest.TestCase):
