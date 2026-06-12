@@ -104,7 +104,7 @@ def build_server() -> FastMCP:
     ) -> str:
         """Tradeable USDⓈ-M perp markets, one line each: SYMBOL last 24h% volume
         (mainnet prices). `search` filters by symbol substring (e.g. "BTC").
-        Full API contract: resource sunday://manual."""
+        Full API contract: resource sunday://manual (or http GET /manual)."""
         q: dict = {"sort": sort, "order": order, "page": page, "page_size": page_size}
         if search:
             q["symbol"] = search
