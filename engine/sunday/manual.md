@@ -51,6 +51,8 @@ curl -sX POST http://127.0.0.1:7777/api/perp/order -H 'Content-Type: application
 curl -sX POST http://127.0.0.1:7777/api/perp/leverage     -d '{"symbol":"BTCUSDT","leverage":10}'
 curl -sX POST http://127.0.0.1:7777/api/perp/margin-mode  -d '{"symbol":"BTCUSDT","mode":"cross"}'
 curl -sX POST http://127.0.0.1:7777/api/perp/close         -d '{"symbol":"BTCUSDT"}'   # reduce-only 平倉
+#   平倉會自動撤掉該標殘留的 TP/SL 腿（回 cancelled_protection）。倉位以其他方式歸零（TP 觸發、
+#   外部平倉）時，引擎下一輪輪詢偵測到也會自動清掃孤兒腿。
 curl -sX DELETE "http://127.0.0.1:7777/api/perp/order/<id>?symbol=BTCUSDT"
 curl -sX DELETE "http://127.0.0.1:7777/api/perp/orders?symbol=BTCUSDT"                  # 撤該標所有掛單（含 TP/SL 腿）
 ```

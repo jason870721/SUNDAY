@@ -218,12 +218,22 @@ def set_margin_mode(req: MarginModeReq) -> dict:
 
 @router.post("/close")
 def close(req: CloseReq) -> dict:
-    """Flatten an open position with a reduce-only market order."""
+    """Flatten an open position with a reduce-only market order, then cancel the
+    symbol's now-orphaned TP/SL trigger legs (BUG-02 — Binance strands them
+    inconsistently). ``cancelled_protection`` lists the swept leg ids."""
     require_trade_key()
     result = ex_call(lambda: exchange.close_position(req.symbol))
     if result is None:
         raise HTTPException(404, f"no open position for {req.symbol.upper()}")
-    return {"ok": True, "closed": _norm_order(result)}
+    out = {"ok": True, "closed": _norm_order(result)}
+    try:
+        cancelled, failed = exchange.sweep_orphan_legs(req.symbol)
+        out["cancelled_protection"] = cancelled
+        if failed:
+            out["cancel_failed"] = failed
+    except Exception as e:  # the flatten DID happen — report the sweep miss, don't 5xx
+        out["protection_sweep_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+    return out
 
 
 @router.delete("/order/{order_id}")
