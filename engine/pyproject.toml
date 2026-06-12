@@ -18,6 +18,13 @@ dependencies = [
 # The pure logic (indicators / pagination / alerts / indices parsers / events) is
 # stdlib-only, so it stays unit-testable anywhere via `python -m unittest`.
 
+[project.optional-dependencies]
+# sunday_mcp sidecar only (milestone-9, PRD-9.1) — the engine itself never imports
+# these (invariant S7: server.py is the only module that touches the SDK, lazily).
+# Pinned to the latest minor at implementation time (needs FastMCP streamable-HTTP
+# + custom_route); bump deliberately and re-run scripts/smoke-mcp.sh as regression.
+mcp = ["mcp>=1.27,<1.28"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
