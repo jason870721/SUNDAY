@@ -1,8 +1,8 @@
 # review-day 唯讀查 Sunday 的成交與績效（reviewer 復盤專用）
 
-Sunday 在 `http://127.0.0.1:7777`，用 **`http_request`** 唯讀查（GET）。**你不下單、不改倉。**
+**通道（按用途選）**：快讀快查用 `mcp__sunday__*` 唯讀工具（`trades {symbol}`（自帶當頁 Σ realized）· `order_history {symbol}` · `positions {}` · `pnl_drawdown {}`）；**要餵 `repl` 算數的原始 JSON 用 `http_request`**（MCP 回的是整形文字，不適合 parse）；寫日誌 `POST /api/journal` 沒有 MCP 工具，照走 `http_request`。**你不下單、不改倉。**
 
-## 復盤主力端點（GET）
+## 復盤主力端點（GET；餵 repl 用這組拿原始 JSON）
 
 ```jsonc
 { "method":"GET", "url":"http://127.0.0.1:7777/api/account/trades", "query":{ "symbol":"BTCUSDT", "page":"1" } }  // ★ 成交 + realized PnL

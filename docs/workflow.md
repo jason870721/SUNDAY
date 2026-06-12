@@ -3,7 +3,8 @@
 > 這份文件描述**整個系統怎麼協作**：User、交易團隊 swarm（evva）、交易所代理（Sunday）、
 > 幣安、與 User dashboard。讀完你應該能回答兩件事：**(1) 誰真正執行下單？(2) 每個 agent 做什麼？**
 > 對應 PRD：[`prd/milestone-6/`](prd/milestone-6/)（轉向 agent-native proxy）+
-> [`prd/milestone-8/`](prd/milestone-8/)（韌性 / 黑金 UI / Telegram）。
+> [`prd/milestone-8/`](prd/milestone-8/)（韌性 / 黑金 UI / Telegram）+
+> [`prd/milestone-9/`](prd/milestone-9/)（sunday-mcp typed 工具通道，混合制）。
 > 狀態：反映 **milestone-6 轉向之後的正典系統**。舊的「策略監督引擎」版（thesis/desk/
 > ablation/envelope，milestone-4/5）已整批移除，本文不再描述它。
 
@@ -35,7 +36,7 @@ friday 執行 SOP 的 pre-flight 核對 + 每筆單強制掛交易所原生 TP/S
    │      (技術面/指數)  (戰術新聞)  (戰略前瞻)  (風控巡檢)   (每日復盤) (看門狗)    │
    │             │                                        send_message ──► friday │
    └─────────────┼───────────────────────────────────────────────────────────────┘
-              ▲ webhook（to:"leader"）                       │ http_request（全部免 token）
+              ▲ webhook（to:"leader"）     │ mcp__sunday__*（:7780 sidecar）+ http_request 降級（全部免 token）
               │                               ▼
    ┌──────────┴──────────────────── 代理平面：Sunday（:7777, Python）──────────────┐
    │  routers/*（markets klines funding perp account indices alerts monitor        │
@@ -51,7 +52,12 @@ friday 執行 SOP 的 pre-flight 核對 + 每筆單強制掛交易所原生 TP/S
 
 **HTTP 邊界**（其餘一律不准跨）：
 
-1. **swarm → Sunday** — agents 用通用 **`http_request`** 打 Sunday API（全部免 token，req 9）。
+1. **swarm → Sunday（混合制，milestone-9）** — 熱路徑（行情/帳戶/交易）優先走
+   **`mcp__sunday__*` typed 工具**（`sunday_mcp` sidecar `:7780/mcp` → `:7777`；22 工具
+   + `sunday://manual` resource；寫入 schema 強制 TP/SL/memo/agent）；工具不可用即降級
+   **`http_request`** 直打 Sunday API（S6 常開），長尾端點（memory/journal/reports）
+   本來就走 `http_request`。全部免 token（req 9）；kill-switch = `.evva/settings.json`
+   設 `disabled:true` 重啟 swarm。
 2. **Sunday → swarm** — webhook `POST :8888/api/swarm/sunday/event`（RP-9），payload
    `{title, body, data, to}`；`price_alert` 固定送 `to:"leader"`（evva 解析成 friday），
    `position_pnl` 的收件人由 `MONITOR_WEBHOOK_TO` 決定（預設且現行 `leader`）。
@@ -107,7 +113,7 @@ friday 執行 SOP 的 pre-flight 核對 + 每筆單強制掛交易所原生 TP/S
 | **researcher** | **8h** cron（00:00 / 08:00 / 16:00）/ friday 指派課題 | **戰略**前瞻：四領域（美股新聞 / 區塊鏈 / 鏈上新協議 / 美政府動態）任意探索 → 對照 `/api/markets`·`/api/indices` 收斂成 1–3 個可交易新方向 → 餵 friday；線索累積在 `/api/memory/researcher` | 不下單；無夠格發現就明說 |
 | **risk-monitor** | **1h** cron | 風控巡檢：`/api/account/pnl`·`/drawdown`·`/balance` 對照 friday↔risk 共識（裸倉？超標？高相關集中？）→ 決策越線與機械缺陷（裸倉/孤兒掛單）都警告 friday——他是唯一交易之手，risk-monitor 是唯一外部煞車；連兩次未處理 `POST /api/reports` 升級 User | **只觀察只建議**，沒有交易職權 |
 | **reviewer** | 每日 **00:00** cron（時區跟著 evva 主機） | 當日復盤：`/api/account/trades`·`/orders`·`/pnl`（repl 算命中率/賺賠比）歸因賺賠與 10% 月目標進度，**決策與執行分開歸因（兩者皆 friday）** → `POST /api/journal`（User 在 dashboard Journal 分頁讀）+ 重點回報 friday 並追蹤落實 | 不下單 |
-| **watchdog** | **5m** cron（pin 在廉價模型） | 看門狗：`GET /health` + Top10 市場急拉急殺比對（快照存 `{workdir}/.watchdog-markets.json`）→ **只在異常時**通知 friday，正常就靜默收工 | 不分析、不研究、無 memory |
+| **watchdog** | **5m** cron（pin 在廉價模型） | 看門狗：`GET /health`（🚨緊急）+ Top10 市場急拉急殺比對 + `GET :7780/healthz` sidecar 監測（ℹ️非緊急、狀態翻轉才報；快照含 `mcp_ok` 存 `{workdir}/.watchdog-markets.json`）→ **只在異常時**通知 friday，正常就靜默收工 | 不分析、不研究、無 memory |
 | **evva**（persona member，RP-29） | friday 的 ticket / 訊息（**無 cron**，純派工驅動） | **特派工程師**：接 Sunday 軟體改動 ticket（`docs/prd/` PRD 實作、bug 修復）→ 實作 → `./scripts/run-tests.sh` 綠 → commit main → 照 RUNBOOK 重啟（**先知會 friday** 擇時）→ 驗 `/health` → 回報（票號+hash+證據）；失敗 `git revert` 回滾重啟。行規見 repo 根的 `EVVA.md` | 不下單、不碰 `/api/perp`；不改憲法與隊友記憶；不碰 `../evva` |
 
 **協作管道**：`send_message`（叫醒對方；`to:"all"` 廣播、`ref_task` 關聯課題）、task 面板
@@ -119,6 +125,13 @@ runtime 改任何 worker 的 cron 與指令——他的方向盤；動之前先 
 ---
 
 ## 4. Sunday 的 API 面（agent 的完整合約 = `GET /manual`）
+
+> **milestone-9 起，下表的熱路徑（行情/帳戶/交易/提醒）另有 typed MCP 工具版**：sidecar
+> `sunday_mcp`（`:7780/mcp`）提供 22 個 `mcp__sunday__*` 工具（13 唯讀 + 8 寫入 + ping）
+> 與 `sunday://manual` resource——寫入 schema 強制 `agent`/`take_profit`/`stop_loss`/`memo`
+> （裸單與匿名單在 schema 層不可表達）、輸出整形進 60k 預算、寫入零自動重試（連線斷 =
+> placed-or-not UNKNOWN，先對帳再動）。**本表（http_request）永遠是降級通道與長尾通道**
+> （S6）；營運見 RUNBOOK §10。
 
 | 群組 | 端點 | 用途 |
 | --- | --- | --- |

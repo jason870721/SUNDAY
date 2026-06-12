@@ -66,8 +66,10 @@ engine/sunday/
 
 ## 與 evva 的關係（重要）
 
-- evva 是 swarm runtime，**獨立 Go 專案在 `../evva`**。本專案是 evva swarm 的**被使用對象**：agent 用
-  通用 `http_request` 操作 Sunday，Sunday 用 webhook 回推事件。**不從這裡改 evva。**
+- evva 是 swarm runtime，**獨立 Go 專案在 `../evva`**。本專案是 evva swarm 的**被使用對象**：agent 走
+  混合制操作 Sunday——熱路徑用 `mcp__sunday__*` typed 工具（`sunday_mcp` sidecar，milestone-9）、
+  降級與長尾用通用 `http_request`；Sunday 用 webhook 回推事件。**不從這裡改 evva**（MCP 接入只是
+  `.evva/settings.json` 一段設定，evva 內仍零 Sunday-specific code）。
 - Sunday 只消費 evva 公開介面（`POST /api/swarm/{ref}/event`，RP-9）。這仍是 multi-agent completeness
   oracle 的重點：swarm 只靠通用工具 + `/manual` 文件就能驅動任意 HTTP 外部系統。
 

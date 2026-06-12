@@ -10,11 +10,6 @@ workdir: .
 #                      in-position standing rules, reconcile), runs the team (task board,
 #                      schedule_set, alarm_set), owns the risk consensus with risk-monitor,
 #                      reports to the User.
-# A crypto perp trading team on Sunday (Binance USDⓈ-M proxy), reorganised around a
-# decision/execution split:
-#   friday (leader)  = COMMANDER / PM — decides trades and writes order tickets, runs the
-#                      team (task board, schedule_set, alarm_set), owns the risk consensus
-#                      with risk-monitor, reports to the User. Does NOT routinely execute.
 #   evva (persona)   = RESIDENT ENGINEER — friday's software-change tickets for Sunday
 #                      (PRD implementation, bug fixes): implement → tests green → commit
 #                      main → RUNBOOK restart → verify /health → report back. No trading.
@@ -27,7 +22,12 @@ workdir: .
 #                      two ignored warnings → escalate to the User via /api/reports.
 #   reviewer         = daily post-mortem; still attributes decision vs execution errors
 #                      separately (both friday's now); tracks whether advice changed behavior.
-#   watchdog         = cheap 3-min liveness + Top10 volatility tripwire.
+#   watchdog         = cheap 5-min liveness (engine + mcp sidecar) + Top10 volatility tripwire.
+#
+# Channel discipline (milestone-9): hot-path Sunday calls go through the typed
+# mcp__sunday__* tools first (sidecar :7780); on tool error members degrade to
+# http_request + GET /manual (S6) and say so in their reports. Long-tail endpoints
+# (memory boards / journal / reports) stay on http_request by design.
 #
 # Wake discipline: friday is primarily EVENT-driven — Sunday webhooks every 5% position-PnL
 # step and triggered price alerts to the leader (MONITOR_WEBHOOK_TO stays "leader"), and
@@ -40,7 +40,7 @@ leader:
   budget_tokens: -1        # never freeze the commander (workers stay capped; runs are bounded by stall_hard_timeout)
   schedule:
     cron: "*/30 * * * *"
-    prompt: "指揮官例行巡檢（協調 + 執行衛生，非看盤輪詢）：① GET /api/memory/friday 回顧憲法（共識/watchlist/持倉理由/standing rules）；② GET /api/account/positions·/pnl 對帳 + 執行衛生——每倉 protection 驗一遍：stop_loss:false 或 sl_qty_covers:false 立刻補齊（POST /api/perp/protection），null 就去 /api/account/orders/open 確認；對照 open orders 撤掉已平倉標的的孤兒 TP/SL 掛單；standing rules 觸發條件成立的照規則執行；③ task_list + proposal_list 盤點看板——卡在 running 的課題要不要催（send_message 帶 ref_task）、verifying 的逐一查證後 task_verify（不合格退件寫清楚缺什麼）、open 的提案逐一裁決（proposal_accept 或 proposal_decline 附理由）；④ list_members 看儀表板——誰忙誰閒、token 燒太兇的讓他歇、排程節奏不對就 schedule_set 調（改動會持久化，記下何時調回來）；⑤ GET /api/alerts?status=active 清掉不再需要的提醒；⑥ 有未閉環的隊友回報就回掉（採納/不採納+理由）。憲法有變就 PUT /api/memory/friday 寫回、私人教訓寫進自己的記憶目錄；都正常就一句 stand down。"
+    prompt: "指揮官例行巡檢（協調 + 執行衛生，非看盤輪詢；Sunday 熱路徑優先 mcp__sunday__* 工具，壞了退 http_request 並註明）：① GET /api/memory/friday 回顧憲法（共識/watchlist/持倉理由/standing rules；長尾端點走 http_request）；② 對帳 + 執行衛生（MCP positions·pnl_drawdown）——每倉行尾保護旗標驗一遍：SL✗(naked)/SL△(partial) 立刻補齊（MCP set_protection），SL?(unknown) 用 protection_status 確認；對照 open_orders 撤掉已平倉標的的孤兒 TP/SL 掛單；standing rules 觸發條件成立的照規則執行；③ task_list + proposal_list 盤點看板——卡在 running 的課題要不要催（send_message 帶 ref_task）、verifying 的逐一查證後 task_verify（不合格退件寫清楚缺什麼）、open 的提案逐一裁決（proposal_accept 或 proposal_decline 附理由）；④ list_members 看儀表板——誰忙誰閒、token 燒太兇的讓他歇、排程節奏不對就 schedule_set 調（改動會持久化，記下何時調回來）；⑤ GET /api/alerts?status=active 清掉不再需要的提醒；⑥ 有未閉環的隊友回報就回掉（採納/不採納+理由）。憲法有變就 PUT /api/memory/friday 寫回、私人教訓寫進自己的記憶目錄；都正常就一句 stand down。"
 
 workers:
   - persona: evva            # 特派工程師 — friday 的 Sunday 軟體改動需求由他實作（PRD 票/bug 修復）
@@ -51,7 +51,7 @@ workers:
   - agent: analyst-flow
     schedule:
       cron: "*/10 * * * *" # every 10 mins
-      prompt: "例行技術面巡檢：先看 my_tasks 有無 friday 指派的標的；GET /api/indices 掃世界指數看風險胃納，對 friday 關注 / 持有的標的（GET /api/memory/friday 的 watchlist）查 /api/klines/indicators·/api/funding 判讀方向與關鍵價位，send_message friday（方向 + 強度 + 支撐/壓力/建議停損 + 理由）。沒事就一句 stand down。"
+      prompt: "例行技術面巡檢：先看 my_tasks 有無 friday 指派的標的；掃世界指數看風險胃納（MCP indices，降級 GET /api/indices），對 friday 關注 / 持有的標的（GET /api/memory/friday 的 watchlist）查指標與資金費（MCP indicators·funding，降級 /api/klines/indicators·/api/funding）判讀方向與關鍵價位，send_message friday（方向 + 強度 + 支撐/壓力/建議停損 + 理由）。沒事就一句 stand down。"
   - agent: analyst-news
     schedule:
       cron: "0 * * * *" # every hr
@@ -59,20 +59,20 @@ workers:
   - agent: researcher        # 前瞻研究員 — 一天 3 次（平均分佈，每 8h）任意探索找新方向給 friday
     schedule:
       cron: "0 0,8,16 * * *" # 3×/day, evenly spaced (00:00 / 08:00 / 16:00)
-      prompt: "例行前瞻研究（一天 3 次）：① GET /api/memory/researcher 接續上次線索 + GET /api/memory/friday 看 friday 在追什麼；② my_tasks 看 friday 有無指派研究課題（有則優先深挖）；③ todo_write 規劃這次的探索路線，在四領域〔美股市場新聞 / 區塊鏈大小事 / 鏈上新協議 / 美國政府新動態〕探索找新苗頭，對照 GET /api/markets·/api/indices 看能不能落地成可交易標的；④ 收斂成 1–3 個高品質新方向 send_message friday（是什麼 + 為什麼現在 + 可交易表達 + 待驗證 + 來源），無夠格發現就一句「本次研究無新方向，續追 X/Y」；⑤ 收工前 PUT /api/memory/researcher 整份寫回（每條標日期，過期的標記/刪除）。"
+      prompt: "例行前瞻研究（一天 3 次）：① GET /api/memory/researcher 接續上次線索 + GET /api/memory/friday 看 friday 在追什麼（記憶板是長尾端點，走 http_request）；② my_tasks 看 friday 有無指派研究課題（有則優先深挖）；③ todo_write 規劃這次的探索路線，在四領域〔美股市場新聞 / 區塊鏈大小事 / 鏈上新協議 / 美國政府新動態〕探索找新苗頭，對照可交易性（MCP markets_list·indices，降級 GET /api/markets·/api/indices）；④ 收斂成 1–3 個高品質新方向 send_message friday（是什麼 + 為什麼現在 + 可交易表達 + 待驗證 + 來源），無夠格發現就一句「本次研究無新方向，續追 X/Y」；⑤ 收工前 PUT /api/memory/researcher 整份寫回（每條標日期，過期的標記/刪除）。"
   - agent: risk-monitor
     budget_tokens: -1        # the brake line is never frozen by the daily budget breaker
     schedule:
       cron: "0 * * * *" # every hr
-      prompt: "風控巡檢：先 GET /api/memory/friday 確認風控共識存在（沒有 = 最高優先異常，立刻找 friday 協商、不准 stand down）；GET /api/account/pnl（exposure_pct + 每倉 protection/liq_distance_pct）·/drawdown·/balance，對照共識（單筆/總曝險/槓桿/回撤/單一標的/可用餘額下限）——protection 顯示裸倉或半裸？超標？drawdown_pct 逼頂？free 逼近下限？高相關標的同向集中？一律找 friday（交易之手只有他）：緊急機械缺陷（裸倉/半裸）直接訊息要他立即補齊保護腿；非緊急缺陷（孤兒掛單清理）與決策越線給警告（哪條越線 + 具體數字 + 建議動作）；嚴重的設 alarm 回查、連兩次未處理就 POST /api/reports 升級給 User。告警與追蹤記錄更新進自己的記憶目錄；沒事就一句 stand down。"
+      prompt: "風控巡檢：先 GET /api/memory/friday 確認風控共識存在（沒有 = 最高優先異常，立刻找 friday 協商、不准 stand down）；拉現況（MCP 四件套 pnl_drawdown·balance·positions·protection_status，降級 GET /api/account/pnl·/drawdown·/balance·/positions），對照共識（單筆/總曝險/槓桿/回撤/單一標的/可用餘額下限）——protection 顯示裸倉或半裸？超標？drawdown_pct 逼頂？free 逼近下限？高相關標的同向集中？一律找 friday（交易之手只有他）：緊急機械缺陷（裸倉/半裸）直接訊息要他立即補齊保護腿；非緊急缺陷（孤兒掛單清理）與決策越線給警告（哪條越線 + 具體數字 + 建議動作）；嚴重的設 alarm 回查、連兩次未處理就 POST /api/reports 升級給 User。告警與追蹤記錄更新進自己的記憶目錄；沒事就一句 stand down。"
   - agent: reviewer
     schedule:
       cron: "0 0 * * *" # 00:00 daily, host TZ
-      prompt: "當日復盤：GET /api/account/trades·/orders·/positions·/pnl·/drawdown（分頁翻完）+ GET /api/memory/friday（憲法與持倉理由）+ 自己記憶目錄裡的 playbook（上次建議），用 repl 算命中率/平均賺賠/對 10% 月目標進度，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、決策錯還是執行錯——兩者都在 friday 身上，仍分開歸因），追蹤上次建議有沒有真的改變行為，把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條建議，討論需不需要改善調整。收工前把 playbook 更新進自己的記憶目錄。"
+      prompt: "當日復盤：拉資料（餵 repl 的 trades/orders 原始 JSON 走 http_request GET /api/account/trades·/orders 並分頁翻完；快照快讀用 MCP positions·pnl_drawdown）+ GET /api/memory/friday（憲法與持倉理由）+ 自己記憶目錄裡的 playbook（上次建議），用 repl 算命中率/平均賺賠/對 10% 月目標進度，歸因當日賺賠（停損及時嗎、停利早晚、friday 採納 analyst 對不對、決策錯還是執行錯——兩者都在 friday 身上，仍分開歸因），追蹤上次建議有沒有真的改變行為，把日誌 POST /api/journal 存進 Sunday（User 在 dashboard Journal 分頁看；body 用 markdown 分節），並 send_message friday 重點 + 1–3 條建議，討論需不需要改善調整。收工前把 playbook 更新進自己的記憶目錄。"
   - agent: watchdog          # cheap DeepSeek-flash watchdog — every 5 min, read-only health + Top10 volatility
     schedule:
       cron: "*/5 * * * *" # 5 mins — keep in sync with the "every 5 min" wording in profile.yml / system_prompt.md / friday's roster
-      prompt: "例行看門狗巡檢：1. GET /health 確認 Sunday 活著；2. GET /api/markets?sort=volume&page=1&page_size=10 比對上次看 Top10 有無急拉急殺（任一 ≥3% 或 24h% 跳動 ≥5pp）/ 名單洗牌。只有發現異常才 send_message friday（指出哪項、哪標的、變多少）；都正常就直接收工、不發訊息。"
+      prompt: "例行看門狗巡檢（全程 http_request 直驗源頭）：1. GET :7777/health 確認 Sunday 活著（掛了=🚨緊急，立報 friday）；2. GET /api/markets?sort=volume&page=1&page_size=10 比對上次看 Top10 有無急拉急殺（任一 ≥3% 或 24h% 跳動 ≥5pp）/ 名單洗牌；3. GET :7780/healthz 看 sunday-mcp sidecar——只在狀態翻轉時通報（掛了=ℹ️非緊急：隊友會自動降級 http_request，擇機重啟即可）；4. 快照（含 mcp_ok）寫回 .watchdog-markets.json。只有發現異常才 send_message friday（指出哪項、哪標的、變多少）；都正常就直接收工、不發訊息。"
 
 settings:
   # bypass = fully autonomous (operator-confirmed): GET reads and POST trades both run

@@ -1,8 +1,8 @@
 # patrol-risk 唯讀巡檢 Sunday 的帳戶與風險狀態（risk-monitor 專用）
 
-Sunday 在 `http://127.0.0.1:7777`，用 **`http_request`** 唯讀查（GET）。**你不下單、不改倉——只觀察、建議、追蹤、升級。**
+**通道（混合制）**：巡檢優先用 `mcp__sunday__*` 唯讀工具——`pnl_drawdown {}`（pnl+drawdown 一次合併）· `balance {}` · `positions {page?}`（每倉行尾就是保護旗標：`SL✗(naked)`/`SL△(partial)`/`SL?(unknown)`）· `protection_status {symbol}` · `open_orders {symbol?}` · `funding {symbol}`；工具不可用（tool error / server 不在）才用 **`http_request`** 打下方端點（降級），並在警告/回報註明。**你不下單、不改倉——只觀察、建議、追蹤、升級。**
 
-## 巡檢主力端點（GET）
+## 巡檢主力端點（GET，降級通道）
 
 ```jsonc
 { "method":"GET", "url":"http://127.0.0.1:7777/api/account/pnl" }            // ★ 曝險聚合 total_notional/exposure_pct + 每倉 protection/liq_distance_pct/ROI%/memo
