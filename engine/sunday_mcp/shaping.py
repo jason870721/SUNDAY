@@ -237,7 +237,11 @@ def _index_line(it: dict) -> str:
     label = it.get("label") or it.get("key") or "?"
     if not it.get("available"):
         return f"{label}: unavailable"
-    parts = [f"{label}: {fmt_price(it.get('value'))}{it.get('unit') or ''}"]
+    # Crypto indices (F&G, dominance) carry `value`; the traditional Stooq/Yahoo
+    # quotes (VIX/DXY/SPX/NDX/US10Y/gold/oil) carry `price`. Read either — the
+    # headline number is the whole point of the line.
+    headline = it.get("value") if it.get("value") is not None else it.get("price")
+    parts = [f"{label}: {fmt_price(headline)}{it.get('unit') or ''}"]
     if it.get("classification"):
         parts.append(str(it["classification"]))
     if it.get("change_pct") is not None:

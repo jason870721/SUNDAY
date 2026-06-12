@@ -241,16 +241,30 @@ class FundingTest(unittest.TestCase):
 
 class IndicesTest(unittest.TestCase):
     def test_snapshot_lines(self):
+        # Crypto indices carry `value`; traditional (Stooq/Yahoo) ones carry
+        # `price` — these fixtures mirror the engine's real payloads (a made-up
+        # `value` on VIX once hid a "VIX: ?" rendering bug here).
         out = shaping.shape_indices({"items": [
             {"key": "fear-greed", "label": "Fear & Greed", "available": True,
              "value": 72, "classification": "Greed", "stale": False},
-            {"key": "vix", "label": "VIX", "available": True, "value": 14.5,
-             "change_pct": -3.1, "stale": True},
+            {"key": "vix", "label": "VIX", "available": True, "price": 14.5,
+             "open": 15.0, "change_pct": -3.1, "source": "stooq", "stale": True},
             {"key": "gold", "label": "Gold", "available": False},
         ]})
         self.assertIn("Fear & Greed: 72 · Greed", out)
         self.assertIn("VIX: 14.5 · -3.10% · ⚠ stale", out)
         self.assertIn("Gold: unavailable", out)
+
+    def test_traditional_index_renders_price(self):
+        """The engine's macro/equities/energy payloads have `price`, not `value`
+        — the headline number must come from either field."""
+        out = shaping.shape_index({"key": "oil", "label": "Brent Crude Oil",
+                                   "available": True, "price": 87.09,
+                                   "prev_close": 90.38, "change_pct": -3.64,
+                                   "source": "yahoo", "as_of": 1781277000000})
+        self.assertIn("Brent Crude Oil: 87.09", out)
+        self.assertIn("-3.64%", out)
+        self.assertNotIn("?", out)
 
     def test_one_index_with_asof(self):
         out = shaping.shape_index({"key": "btc-dominance", "label": "BTC dominance",
